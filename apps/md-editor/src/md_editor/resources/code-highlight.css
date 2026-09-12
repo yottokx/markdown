@@ -1,0 +1,28 @@
+/* Token colors only: keep code layout, weight, and line metrics unchanged. */
+pre code .tok-keyword { color: #8054a3; }
+pre code .tok-comment { color: #667680; }
+pre code .tok-string { color: #38704b; }
+pre code .tok-number { color: #ab5b2a; }
+pre code .tok-builtin { color: #766238; }
+pre code .tok-function { color: #326b94; }
+pre code .tok-type { color: #77599b; }
+pre code .tok-tag { color: #397a84; }
+pre code .tok-attribute { color: #816a32; }
+pre code .tok-decorator { color: #936247; }
+pre code .tok-operator { color: #556883; }
+pre code .tok-inserted { color: #3b7750; }
+pre code .tok-deleted { color: #a24850; }
+
+:root[data-theme="dark"] pre code .tok-keyword { color: #c6a0dc; }
+:root[data-theme="dark"] pre code .tok-comment { color: #9ba8b7; }
+:root[data-theme="dark"] pre code .tok-string { color: #a4c796; }
+:root[data-theme="dark"] pre code .tok-number { color: #d8ab82; }
+:root[data-theme="dark"] pre code .tok-builtin { color: #d5c089; }
+:root[data-theme="dark"] pre code .tok-function { color: #98bce4; }
+:root[data-theme="dark"] pre code .tok-type { color: #c3a6df; }
+:root[data-theme="dark"] pre code .tok-tag { color: #8dc9c8; }
+:root[data-theme="dark"] pre code .tok-attribute { color: #d3c493; }
+:root[data-theme="dark"] pre code .tok-decorator { color: #c8ad89; }
+:root[data-theme="dark"] pre code .tok-operator { color: #a7b5c6; }
+:root[data-theme="dark"] pre code .tok-inserted { color: #a7c995; }
+:root[data-theme="dark"] pre code .tok-deleted { color: #e3a1a8; }

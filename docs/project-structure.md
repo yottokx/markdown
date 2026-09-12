@@ -2,7 +2,7 @@
 
 決定日: 2026-09-12
 
-今回の対象は配置方針の決定・更新。この文書のみを変更し、ソースの移動、環境の再作成、アプリの実装、PyInstallerビルドはまだ行わない。
+この文書は両アプリを独立して保守するための配置方針です。2026-09-12に配置整理とMarkNotes開発ベースの作成を実施しました。実施内容と検証結果は[整理作業の記録](project-reorganization.md)を参照してください。スクラップブック固有機能と配布EXEのビルドは今回の対象外です。
 
 ## 1. 採用する構成
 
@@ -19,7 +19,7 @@
 
 ## 2. 整理後の配置
 
-以下は到達先の構成であり、まだ作成・移動していない。
+整理後の構成です。生成物のディレクトリは必要に応じて作られます。
 
 ```text
 C:\Python\envs\markdown\
@@ -67,7 +67,7 @@ C:\Python\envs\markdown\
     └── prompt_editor_demo/         # 現在の「参考」配下の資料
 ```
 
-MarkNotesにも必要になった段階で `.venv/`、`artifacts/`、`build/`、`dist/` ができる。空ディレクトリや未使用の実装モジュールを先に大量作成しない。
+MarkNotesにも専用の `.venv/` と検証用 `artifacts/` を置く。`build/` と `dist/` はそのアプリのビルド時に生成する。空ディレクトリや未使用の実装モジュールを先に大量作成しない。
 
 現在のルートにある `src/`、`tests/`、`packaging/`、`tools/`、`examples/`、アプリの設定ファイル・ロックファイルと既存文書は、まとまりを保って `apps/md-editor/` へ移す。既存の `artifacts/` もエディタ側に帰属させる。ルートのREADMEは両アプリへの入口として新しく用意する。
 
@@ -138,14 +138,14 @@ MarkNotesにも必要になった段階で `.venv/`、`artifacts/`、`build/`、
 
 エディタの初回配布ビルドを開発終了の区切りとはせず、その後も必要に応じて修正・再ビルドする。
 
-今回、この文書の追加・更新以外に移動・コミット・テスト・ビルドは実施していない。
+上記の整理手順を実施し、基準保存・配置変更・環境再作成・検証を行った。詳細は[整理作業の記録](project-reorganization.md)に記載する。配布EXEのビルドは各アプリの独立した作業として残っている。
 
 ## 判断に使用した現状資料
 
-以下のリンクは現在の配置に対応している。配置変更時に合わせて更新する。
+以下のリンクは整理後の配置に対応している。
 
-- [SESSION_SUMMARY.md](../SESSION_SUMMARY.md)
-- [README.md](../README.md)
-- [pyproject.toml](../pyproject.toml)
-- [PyInstaller設定](../packaging/md-editor.spec)
-- [アプリ起動・設定・ウィンドウ構成](../src/md_editor/app.py)
+- [SESSION_SUMMARY.md](../apps/md-editor/SESSION_SUMMARY.md)
+- [README.md](../apps/md-editor/README.md)
+- [pyproject.toml](../apps/md-editor/pyproject.toml)
+- [PyInstaller設定](../apps/md-editor/packaging/md-editor.spec)
+- [アプリ起動・設定・ウィンドウ構成](../apps/md-editor/src/md_editor/app.py)

@@ -4,7 +4,7 @@
 
 この文書は開発開始時の設計を記録したものです。2026-09-08現在、段階1〜6（以下のフェーズ0〜5）を実装済みです。uv初期化から着手し、スクロール同期、保存・編集・検索・テーマ・貼り付け・表編集、画像の外部編集・個別/一括改名・復旧、CSS付き単体HTML・出力プレビュー・PDFを追加しました。TeX数式・Mermaidは通常プレビューと出力に対応しています。数式・図の専用エディタは実装対象にしません。現在の操作はREADME.md、検証結果はVERIFICATION.mdを参照してください。
 
-ユーザー指定により、PyInstallerの再ビルドは最終の段階7（フェーズ6）まで行いません。段階1〜2で作成した既存EXEは旧版です。
+開発当初はPyInstallerの再ビルドを段階7（フェーズ6）まで保留していました。2026-09-12のプロジェクト分離以降は、エディタの修正・検証・ビルドをMarkNotesとは独立して進めます。現在の作業場所は `apps/md-editor/`、段階1〜2の旧配布物は `artifacts/legacy-dist/` です。
 
 ## 1. 基本方針と前提
 
@@ -18,7 +18,7 @@
 
 ## 2. 最初に行うuv初期化と技術構成
 
-開発開始時に `C:\Python\envs\markdown` で次を実行する。プロジェクト名は仮に `md-editor` とする。
+以下は開発開始時に `C:\Python\envs\markdown` で行った初期化の記録であり、整理後に再実行する手順ではない。プロジェクト名は仮に `md-editor` とする。
 
 ```powershell
 uv init --app --package --name md-editor --python 3.13
@@ -76,7 +76,7 @@ packaging/                PyInstaller specとランチャー
 
 ### 4.1 参考実装で確認できた仕様
 
-対象コードは [editor.py](C:/Python/envs/markdown/参考/prompt_editor_demo/editor.py:108)、動作例は [test_editor.py](C:/Python/envs/markdown/参考/prompt_editor_demo/tests/test_editor.py:124) にある。
+対象コードは [editor.py](../../references/prompt_editor_demo/editor.py)、動作例は [test_editor.py](../../references/prompt_editor_demo/tests/test_editor.py) にある。
 
 | 操作 | 参考実装の挙動 |
 | --- | --- |

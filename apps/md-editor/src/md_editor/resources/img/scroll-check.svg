@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="1200" viewBox="0 0 800 1200" role="img" aria-labelledby="title desc">
+  <title id="title">スクロール確認用の縦長画像</title>
+  <desc id="desc">高さ1200の画像を4つの色帯に分け、縦方向の位置を表示する。</desc>
+  <rect width="800" height="300" fill="#dbeafe"/>
+  <rect y="300" width="800" height="300" fill="#dcfce7"/>
+  <rect y="600" width="800" height="300" fill="#fef3c7"/>
+  <rect y="900" width="800" height="300" fill="#fce7f3"/>
+  <g stroke="#334155" stroke-width="4" fill="none">
+    <rect x="2" y="2" width="796" height="1196"/>
+    <path d="M0 300H800 M0 600H800 M0 900H800 M100 40V1160"/>
+    <path d="M80 100H120 M80 200H120 M80 400H120 M80 500H120 M80 700H120 M80 800H120 M80 1000H120 M80 1100H120"/>
+  </g>
+  <g font-family="sans-serif" fill="#0f172a" text-anchor="middle">
+    <text x="440" y="112" font-size="54" font-weight="bold">SCROLL CHECK</text>
+    <text x="440" y="198" font-size="44">TOP / 0–25%</text>
+    <text x="440" y="455" font-size="44">25–50%</text>
+    <text x="440" y="755" font-size="44">50–75%</text>
+    <text x="440" y="1055" font-size="44">75–100% / BOTTOM</text>
+  </g>
+  <g fill="#334155">
+    <circle cx="100" cy="50" r="12"/>
+    <path d="M78 1134L100 1170L122 1134Z"/>
+  </g>
+</svg>

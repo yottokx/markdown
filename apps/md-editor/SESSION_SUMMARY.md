@@ -2,14 +2,17 @@
 
 - 記録更新日：2026-09-12
 - 記録上の作業期間：2026-09-07〜2026-09-12
-- プロジェクト：`C:\Python\envs\markdown`
+- 当時のプロジェクト：`C:\Python\envs\markdown`
+- 現在の配置：`C:\Python\envs\markdown\apps\md-editor`
 - 対象：**最初の要件整理・開発計画作成から、uv初期化、段階1〜6の実装、その後の追加機能・UI改善・不具合修正まで、このセッション全体。**
 
 初期計画に沿ってスクロールの検証を先行し、編集・保存・貼り付け・画像管理・表編集・出力を実装した。その後、実際の操作に合わせて設定・メニュー・外観を調整し、コード表示・書式変更・Undo／Redoボタンを追加した。現在版の配布ビルドと配布環境での仕上げは段階7として残っている。
 
+> この文書は既存エディタ開発時の記録です。整理後の作業・検証結果は[整理作業の記録](../../docs/project-reorganization.md)を参照してください。以下の `dist` は当時の配置を指し、その旧配布物は現在 `artifacts/legacy-dist/` にあります。今後のテスト・修正・ビルドはMarkNotesとは独立して行います。
+
 ## 1. 要件整理と開発計画の作成
 
-- Windows向けの通常のデスクトップMarkdownエディタとして、技術構成・操作仕様・段階的な実装順序を設計し、[PLAN.md](C:/Python/envs/markdown/PLAN.md)に記録した。
+- Windows向けの通常のデスクトップMarkdownエディタとして、技術構成・操作仕様・段階的な実装順序を設計し、[PLAN.md](PLAN.md)に記録した。
 - PySide6を採用し、左をMarkdownソース、右をQWebEngineViewのライブプレビューとする構成を決定した。
 - CommonMarkを基礎に、表・取り消し線・タスクリスト等を扱う方針を整理した。
 - `prompt_editor_demo`はインデント操作の仕様だけを参考にし、常駐・半透明・最前面表示などのUIは採用しなかった。
@@ -181,7 +184,7 @@
 - **直近の全736件成功は、左上Undo／Redo追加前の時点。追加後は関連テストと実画面確認を実施した。**
 - 書式変換の追加テストはインライン65件・ブロック53件・Qt統合22件。独立したMarkdown解析との159ケースの照合も行った。
 - HTML／PDF、画像改名、保存・Undoの整合、テーマ、アイコン、メニュー、スクロールなどの確認画像・診断値を保存した。
-- 詳細は[VERIFICATION.md](C:/Python/envs/markdown/VERIFICATION.md)に記録している。
+- 詳細は[VERIFICATION.md](VERIFICATION.md)に記録している。
 
 ## 14. PyInstallerと残っている事項
 
@@ -206,16 +209,16 @@
 
 ## 関連文書・成果物
 
-- [開発計画：PLAN.md](C:/Python/envs/markdown/PLAN.md)
-- [現在の利用方法：README.md](C:/Python/envs/markdown/README.md)
-- [詳細な検証記録：VERIFICATION.md](C:/Python/envs/markdown/VERIFICATION.md)
-- [HTML出力の検証成果物](C:/Python/envs/markdown/artifacts/stage56/output.html)
-- [PDF出力の検証成果物](C:/Python/envs/markdown/artifacts/stage56/output.pdf)
-- [コードハイライト・コピーの確認画像](C:/Python/envs/markdown/artifacts/code-preview/copied.png)
-- [書式の部分解除後の確認画像](C:/Python/envs/markdown/artifacts/formatting/partial-removal.png)
-- [Undo／Redoボタンの確認画像](C:/Python/envs/markdown/artifacts/undo-redo-toolbar/dark-redo-enabled.png)
+- [開発計画：PLAN.md](PLAN.md)
+- [現在の利用方法：README.md](README.md)
+- [詳細な検証記録：VERIFICATION.md](VERIFICATION.md)
+- [HTML出力の検証成果物](artifacts/stage56/output.html)
+- [PDF出力の検証成果物](artifacts/stage56/output.pdf)
+- [コードハイライト・コピーの確認画像](artifacts/code-preview/copied.png)
+- [書式の部分解除後の確認画像](artifacts/formatting/partial-removal.png)
+- [Undo／Redoボタンの確認画像](artifacts/undo-redo-toolbar/dark-redo-enabled.png)
 
-現在の実装は、プロジェクトのルートから起動する。
+現在の実装は、このアプリのディレクトリ `apps/md-editor/` から起動する。
 
 ```powershell
 uv run md-editor

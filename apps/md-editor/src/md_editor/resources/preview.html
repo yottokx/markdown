@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' qrc:; style-src 'self' 'unsafe-inline'; img-src file: data:; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri file:; form-action 'none'">
+  <title>Markdown Preview</title>
+  <link rel="stylesheet" href="vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="preview.css">
+  <link rel="stylesheet" href="code-highlight.css">
+  <script src="qrc:///qtwebchannel/qwebchannel.js" defer></script>
+  <script src="vendor/katex/katex.min.js" defer></script>
+  <script src="vendor/mermaid/mermaid.min.js" defer></script>
+  <script src="rich-content.js" defer></script>
+  <script src="preview.js" defer></script>
+</head>
+<body>
+  <main id="content" aria-label="Markdown preview"></main>
+  <div id="eof-spacer" aria-hidden="true"></div>
+</body>
+</html>

@@ -1,0 +1,42 @@
+[project]
+name = "marknotes"
+version = "0.1.0"
+description = "Development base for the MarkNotes Markdown scrapbook application"
+readme = "README.md"
+authors = [
+    { name = "yotto", email = "yotto.kx@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "charset-normalizer>=3.5.1",
+    "markdown-it-py>=4.2.0",
+    "markdownify>=1.2.3",
+    "mdit-py-plugins>=0.6.1",
+    "nh3>=0.3.7",
+    "pygments>=2.21.0",
+    "pyside6>=6.11.2",
+    "tinycss2>=1.4",
+]
+
+[project.scripts]
+marknotes = "marknotes.app:main"
+
+[build-system]
+requires = ["uv_build>=0.11.9,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.22.2",
+    "pytest>=9.1.1",
+    "pytest-qt>=4.5.0",
+    "ruff>=0.16.6",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+qt_api = "pyside6"
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
