@@ -7,6 +7,12 @@
 | Markdown Editor | 任意の `.md` ファイルを開くエディタ。継続してテスト・修正する | [apps/md-editor](apps/md-editor/README.md) |
 | MarkNotes | タブ・自動保存・履歴・ピン・全文検索・添付管理を備えたMarkdownスクラップブック | [apps/marknotes](apps/marknotes/README.md) |
 
+## 前提
+
+基本的に自分用のプロジェクトです。
+不特定多数の人に使ってもらうアプリとしては設計していません。
+予告なく破壊的変更を行います。
+
 ## 起動と環境構築
 
 リポジトリルートから、必要なアプリだけ環境を作成して起動できます。Python 3.13とuvを使用します。

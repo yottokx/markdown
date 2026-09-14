@@ -24,3 +24,6 @@ artifacts/
 # Windows Explorer metadata
 Thumbs.db
 [Dd]esktop.ini
+
+# Repository ZIP exports
+/exports/
