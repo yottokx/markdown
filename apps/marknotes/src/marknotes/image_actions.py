@@ -46,11 +46,12 @@ class ImageRenameDialog(QDialog):
         if parent is not None:
             self.setPalette(parent.palette())
         self.session, self.source = session, source
+        self._managed_note = bool(getattr(session, "is_managed_note", False))
         self._bulk_error = ""
         self.plan = (
             make_rename_plan(session, source, {image.path: image.path.name})
             if image
-            else bulk_rename_plan(session, source)
+            else bulk_rename_plan(session, source, prefix="image_" if self._managed_note else None)
         )
         layout = QVBoxLayout(self)
         summary = (
@@ -59,14 +60,23 @@ class ImageRenameDialog(QDialog):
             else "未保存文書の一時画像を改名します。初回保存時に文書名に合わせて採番します。"
         )
         note = QLabel(
-            summary + "\n対象はこの文書が参照するimg配下の画像です。"
+            "このノートの assets にある画像のファイル名を変更します。"
+            "\n本文中の参照を更新し、自動保存します。"
+            "変更前のファイルは元に戻す操作のため保持します。"
+            if self._managed_note
+            else summary + "\n対象はこの文書が参照するimg配下の画像です。"
             "\n旧名はUndo履歴用に保持します。同じフォルダの別Markdownからの共有参照があれば、終了後も残します。"
         )
         note.setWordWrap(True)
         layout.addWidget(note)
         if image is None:
             options = QFormLayout()
-            self.prefix = QLineEdit(f"{session.path.stem if session.path else 'untitled'}_")
+            prefix = (
+                "image_"
+                if self._managed_note
+                else f"{session.path.stem if session.path else 'untitled'}_"
+            )
+            self.prefix = QLineEdit(prefix)
             self.prefix.setObjectName("imageRenamePrefix")
             self.prefix.setPlaceholderText("空欄なら連番のみ")
             self.start_number = QSpinBox()
@@ -89,7 +99,13 @@ class ImageRenameDialog(QDialog):
             naming_note.setWordWrap(True)
             layout.addWidget(naming_note)
         self.table = QTableWidget(len(self.plan.entries), 3)
-        self.table.setHorizontalHeaderLabels(["現在の名前", "変更後の名前", "共有参照／確認範囲"])
+        self.table.setHorizontalHeaderLabels(
+            [
+                "現在の名前",
+                "変更後の名前",
+                "添付の範囲" if self._managed_note else "共有参照／確認範囲",
+            ]
+        )
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._sources = [entry.source for entry in self.plan.entries]
@@ -98,9 +114,7 @@ class ImageRenameDialog(QDialog):
             old.setFlags(old.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.table.setItem(row, 0, old)
             self.table.setItem(row, 1, QTableWidgetItem(entry.target.name))
-            shared = QTableWidgetItem(
-                ", ".join(path.name for path in entry.shared_with) or "同じフォルダ内に共有参照なし"
-            )
+            shared = QTableWidgetItem(self._shared_description(entry))
             shared.setFlags(shared.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.table.setItem(row, 2, shared)
         layout.addWidget(self.table)
@@ -124,7 +138,7 @@ class ImageRenameDialog(QDialog):
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
         self.buttons.button(QDialogButtonBox.StandardButton.Ok).setText(
-            "改名して保存" if session.path else "改名"
+            "改名して自動保存" if self._managed_note else "改名して保存" if session.path else "改名"
         )
         self.buttons.accepted.connect(self.accept)
         self.buttons.rejected.connect(self.reject)
@@ -135,6 +149,11 @@ class ImageRenameDialog(QDialog):
             self.start_number.valueChanged.connect(self._regenerate_bulk_names)
             self.digits.valueChanged.connect(self._regenerate_bulk_names)
         self._validate()
+
+    def _shared_description(self, entry):
+        if self._managed_note:
+            return "このノートの添付"
+        return ", ".join(path.name for path in entry.shared_with) or "同じフォルダ内に共有参照なし"
 
     def _regenerate_bulk_names(self, *_args):
         try:
@@ -154,10 +173,7 @@ class ImageRenameDialog(QDialog):
         try:
             for row, entry in enumerate(generated.entries):
                 self.table.item(row, 1).setText(entry.target.name)
-                self.table.item(row, 2).setText(
-                    ", ".join(path.name for path in entry.shared_with)
-                    or "同じフォルダ内に共有参照なし"
-                )
+                self.table.item(row, 2).setText(self._shared_description(entry))
         finally:
             self.table.blockSignals(previous)
         self._validate()
@@ -170,8 +186,14 @@ class ImageRenameDialog(QDialog):
         try:
             names = {path: self.table.item(row, 1).text() for row, path in enumerate(self._sources)}
             self.plan = make_rename_plan(self.session, self.source, names)
+            if self._managed_note and any(entry.case_only for entry in self.plan.entries):
+                raise ValueError(
+                    "大文字・小文字だけの変更は同じ名前として扱われます。異なる名前を指定してください。"
+                )
             self.message.setText(
-                "拡張子と画像形式は維持します。別フォルダの文書からの参照は確認対象外です。"
+                "拡張子と画像形式は維持します。変更前の添付もこのノートに残します。"
+                if self._managed_note
+                else "拡張子と画像形式は維持します。別フォルダの文書からの参照は確認対象外です。"
             )
             self.buttons.button(QDialogButtonBox.StandardButton.Ok).setEnabled(self.plan.changed)
         except (ValueError, OSError) as exc:

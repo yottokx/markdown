@@ -529,3 +529,48 @@ def test_highlight_and_copy_button_keep_code_geometry_during_theme_and_scroll(
     preview.scroll_to_source(len(source.split("\n")) - 1, 1)
     end = wait_position(qtbot, preview, len(source.split("\n")) - 1)
     assert abs(end["scrollY"] - end["maxScroll"]) <= 1
+
+
+def test_resize_clamp_preserves_source_until_layout_and_user_scroll_resumes(
+    qtbot, preview, tmp_path
+):
+    preview.resize(210, 440)
+    source = "\n\n".join(f"Paragraph {index} " + "wrapped content " * 65 for index in range(40))
+    load_document(qtbot, preview, source, tmp_path)
+    preview.scroll_to_source(60, 1)
+    wait_position(qtbot, preview, 60)
+    events = []
+    preview.source_scrolled.connect(lambda position, revision: events.append((position, revision)))
+    result = evaluate(
+        qtbot,
+        preview,
+        """(() => {
+          const before = previewApi.metrics();
+          document.getElementById('content').style.width = '650px';
+          // Force Chromium's new scroll limit before the pending anchor-map RAF.
+          const newLimit = document.documentElement.scrollHeight - innerHeight;
+          const clampedY = scrollY;
+          // Deliver resize then its clamp-scroll in one turn: the platform can
+          // emit this exact ordering when a hidden preview becomes wider.
+          dispatchEvent(new Event('resize'));
+          dispatchEvent(new Event('scroll'));
+          const during = previewApi.metrics();
+          window.resizeRoundTripDone = false;
+          requestAnimationFrame(() => requestAnimationFrame(() => {
+            window.resizeRoundTripDone = true;
+          }));
+          return {beforeY:before.scrollY, newLimit, clampedY, source:during.source};
+        })()""",
+    )
+    assert result["beforeY"] > result["newLimit"]
+    assert result["clampedY"] <= result["newLimit"] + 1
+    assert result["source"] == pytest.approx(60, abs=0.01)
+    qtbot.waitUntil(lambda: evaluate(qtbot, preview, "window.resizeRoundTripDone"))
+    restored = metrics(qtbot, preview)
+    assert restored["source"] == pytest.approx(60, abs=0.01)
+    assert restored["measuredSource"] == pytest.approx(60, abs=0.1)
+    assert not events
+    preview.page().runJavaScript("scrollTo(0, previewApi.metrics().maxScroll * 0.2)")
+    qtbot.waitUntil(lambda: bool(events), timeout=5000)
+    assert events[-1][0] != pytest.approx(60, abs=1)
+    assert events[-1][0] == pytest.approx(metrics(qtbot, preview)["measuredSource"], abs=0.05)

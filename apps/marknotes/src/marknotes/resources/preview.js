@@ -264,7 +264,9 @@
   }
 
   window.addEventListener("scroll", () => {
-    if (state.pendingViewRestore) return;
+    // A wider viewport can clamp scrollY before its RAF replaces the anchor map.
+    // That clamp is layout feedback, not navigation in the old source map.
+    if (state.pendingViewRestore || state.layoutFrame || state.rendering) return;
     const y = window.scrollY;
     if (state.suppressedAtY !== null && Math.abs(y - state.suppressedAtY) <= 0.75) return;
     state.suppressedAtY = null;
@@ -272,7 +274,7 @@
     if (state.reportFrame) return;
     state.reportFrame = requestAnimationFrame(() => {
       state.reportFrame = 0;
-      if (state.pendingViewRestore) return;
+      if (state.pendingViewRestore || state.layoutFrame || state.rendering) return;
       if (state.suppressedAtY !== null && Math.abs(window.scrollY - state.suppressedAtY) <= 0.75) return;
       state.source = sourceForY(window.scrollY);
       if (state.bridge) state.bridge.sourceScrolled(state.source, state.revision);

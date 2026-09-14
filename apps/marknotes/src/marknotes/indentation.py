@@ -208,9 +208,9 @@ class MarkdownEditingMixin:
     """SourceEditor key behavior, independent of application actions."""
 
     def apply_theme(self, dark: bool) -> None:
-        self._gutter_background = QColor("#202a37" if dark else "#f3f5f8")
+        self._gutter_background = QColor("#20252d" if dark else "#f5f7fa")
         self._gutter_foreground = QColor("#8b9bb0" if dark else "#8190a2")
-        background, foreground = ("#18212d", "#dce5f1") if dark else ("#ffffff", "#243244")
+        background, foreground = ("#171c24", "#e1e7ef") if dark else ("#ffffff", "#243244")
         selected, selection_text = ("#345579", "#ffffff") if dark else ("#d5e7ff", "#152b48")
         self.setStyleSheet(
             f"QPlainTextEdit {{ background: {background}; color: {foreground}; "

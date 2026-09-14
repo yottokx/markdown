@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -462,9 +463,15 @@ class MainWindow(DisplayModes, FileActions, EditingActions, ExportActions, Chrom
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="MarkNotes開発ベース（Markdown編集機能）")
-    parser.add_argument("files", nargs="*", type=Path, help="Markdownファイル")
-    parser.add_argument("--sample", action="store_true", help="スクロール検証サンプルを開く")
+    from PySide6.QtWidgets import QMessageBox
+
+    from .notebook import NotebookWindow, default_library_root
+    from .notebook_instance import NotebookInstance
+
+    parser = argparse.ArgumentParser(description="MarkNotes: 自動保存のMarkdownノート")
+    parser.add_argument("files", nargs="*", type=Path, help="ノートに取り込むMarkdownファイル")
+    parser.add_argument("--library", type=Path, help="ライブラリの保存フォルダ")
+    parser.add_argument("--sample", action="store_true", help="検証サンプルをノートに取り込む")
     parser.add_argument("--smoke-report", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     set_windows_app_user_model_id()
@@ -472,23 +479,50 @@ def main(argv: list[str] | None = None) -> int:
     app.setWindowIcon(application_icon())
     app.setApplicationName("MarkNotes")
     app.setOrganizationName("MarkNotes")
-    windows: list[MainWindow] = []
+    settings = QSettings("MarkNotes", "MarkNotes")
+    root = args.library or Path(str(settings.value("library/path", str(default_library_root()))))
     paths = list(args.files)
     if args.sample:
         paths.append(RESOURCE_DIR / "scroll-check.md")
-    for path in paths or [None]:
-        window = MainWindow()
-        windows.append(window)
+    instance = NotebookInstance(root, app)
+    pending_requests = []
+    instance.requested.connect(pending_requests.append)
+    try:
+        if not instance.acquire(paths):
+            return 0
+        window = NotebookWindow(root, settings)
+    except (OSError, ValueError, RuntimeError, sqlite3.DatabaseError) as exc:
+        instance.close()
+        QMessageBox.critical(None, "MarkNotesを開けません", str(exc))
+        return 1
+
+    def activate(files):
+        if window.isMinimized():
+            window.showNormal()
         window.show()
-        if path is not None:
-            if path == RESOURCE_DIR / "scroll-check.md" and args.sample:
-                window.open_sample()
-            else:
-                window.open_path(path)
-        else:
-            window.set_source("", window.session.base_dir, update_session=False)
+        window.raise_()
+        window.activateWindow()
+        for path in files:
+            window.open_path(Path(path))
+
+    instance.requested.disconnect(pending_requests.append)
+    instance.requested.connect(activate)
+    for request in pending_requests:
+        activate(request)
+    app.aboutToQuit.connect(instance.close)
+    window.show()
+    for path in paths:
+        window.open_path(path)
     if args.smoke_report:
         from marknotes.smoke import start_smoke
 
-        start_smoke(windows[0], args.smoke_report)
+        def start_when_ready():
+            if window._active and window._rendered_revision == window._revision:
+                start_smoke(window, args.smoke_report)
+            else:
+                QTimer.singleShot(100, window, start_when_ready)
+
+        if not paths and not window._order:
+            window.new_document()
+        QTimer.singleShot(100, window, start_when_ready)
     return app.exec()

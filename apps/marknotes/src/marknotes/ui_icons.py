@@ -25,6 +25,7 @@ _SHAPES = {
         'a1.5 1.5 0 0 0 1.5-1.5V8.2L15.8 3.5Z"/>'
         '<path d="M7.5 3.5V9h8V3.5M7.5 20.5V14h9v6.5"/>'
     ),
+    "menu": '<path d="M5 6.5h14M5 12h14M5 17.5h14"/>',
     "undo": '<path d="m9 5-5 5 5 5M4 10h9a7 7 0 0 1 7 7v2"/>',
     "redo": '<path d="m15 5 5 5-5 5M20 10h-9a7 7 0 0 0-7 7v2"/>',
     "source": '<path d="m8 7-5 5 5 5m8-10 5 5-5 5M14 4l-4 16"/>',
@@ -110,7 +111,7 @@ def outline_icon(name: str, color: QColor | str) -> QIcon:
     """Return a scalable 24-unit icon in the requested foreground color.
 
     Names: new, open, save, undo, redo, source, preview, split, minimize, maximize, restore,
-    close. Recreate icons with the new foreground color after a theme change.
+    close, menu. Recreate icons with the new foreground color after a theme change.
     """
     if name not in _SHAPES:
         raise ValueError(f"Unknown outline icon: {name}")

@@ -1,6 +1,6 @@
 """Package the generated PNG as a Windows ICO with multiple resolutions.
 
-Run ``uv run python tools/build_app_icon.py`` after replacing app-icon.png.
+Run ``uv run python tools/build_app_icon.py`` after replacing marknotes-icon.png.
 This only resizes and packages the artwork; it does not build the application.
 """
 
@@ -50,8 +50,8 @@ def build_icon(source: Path, destination: Path) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source", type=Path, default=RESOURCES / "app-icon.png")
-    parser.add_argument("--output", type=Path, default=RESOURCES / "app-icon.ico")
+    parser.add_argument("--source", type=Path, default=RESOURCES / "marknotes-icon.png")
+    parser.add_argument("--output", type=Path, default=RESOURCES / "marknotes-icon.ico")
     arguments = parser.parse_args()
     build_icon(arguments.source, arguments.output)
     print(f"Created {arguments.output} ({', '.join(map(str, SIZES))}px)")

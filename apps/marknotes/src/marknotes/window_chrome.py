@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMenuBar,
+    QSizePolicy,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -43,12 +44,14 @@ class TitleBar(QWidget):
         self._title = ""
         self._drag_start: QPoint | None = None
         self.setObjectName("applicationTitleBar")
-        self.setFixedHeight(36)
+        self.setFixedHeight(40)
+        self._center_widget: QWidget | None = None
         self.file_buttons: list[QToolButton] = []
         row = QHBoxLayout(self)
         row.setContentsMargins(6, 0, 0, 0)
         row.setSpacing(0)
         self.left_group = QWidget(self)
+        self.left_group.setObjectName("titleBarActions")
         self.left_layout = QHBoxLayout(self.left_group)
         self.left_layout.setContentsMargins(0, 0, 0, 0)
         self.left_layout.setSpacing(3)
@@ -59,7 +62,13 @@ class TitleBar(QWidget):
         self.left_layout.addWidget(self.app_icon)
         row.addWidget(self.left_group)
         row.addStretch(1)
+        self.drag_region = QWidget(self)
+        self.drag_region.setObjectName("titleBarDragRegion")
+        self.drag_region.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.drag_region.setAccessibleName("ウィンドウを移動")
+        self.drag_region.hide()
         self.controls = QWidget(self)
+        self.controls.setObjectName("titleBarControls")
         controls = QHBoxLayout(self.controls)
         controls.setContentsMargins(0, 0, 0, 0)
         controls.setSpacing(0)
@@ -67,6 +76,7 @@ class TitleBar(QWidget):
         self.maximize_button = self._control("最大化", self.toggle_maximized)
         self.close_button = self._control("閉じる", window.close)
         self.close_button.setObjectName("windowCloseButton")
+        self.close_button.installEventFilter(self)
         for button in (self.minimize_button, self.maximize_button, self.close_button):
             controls.addWidget(button)
         row.addWidget(self.controls)
@@ -81,13 +91,33 @@ class TitleBar(QWidget):
 
     def _control(self, label, callback):
         button = QToolButton(self.controls)
-        button.setFixedSize(44, 36)
+        button.setObjectName("windowControlButton")
+        button.setFixedSize(44, 40)
         button.setIconSize(QSize(18, 18))
         button.setToolTip(label)
         button.setAccessibleName(label)
         button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         button.clicked.connect(callback)
         return button
+
+    def set_center_widget(self, widget: QWidget, drag_width: int = 112) -> None:
+        """Embed tabs while always retaining a usable native window drag target."""
+        row = self.layout()
+        if self._center_widget is None:
+            row.takeAt(1)  # Replace the filename's flexible space.
+        elif self._center_widget is not widget:
+            row.removeWidget(self._center_widget)
+            self._center_widget.setParent(None)
+        row.removeWidget(self.drag_region)
+        self._center_widget = widget
+        widget.setParent(self)
+        widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        row.insertWidget(1, widget, 1)
+        self.drag_region.setFixedWidth(max(0, drag_width))
+        row.insertWidget(2, self.drag_region)
+        self.drag_region.show()
+        self.title_label.hide()
+        widget.show()
 
     def set_file_actions(self, actions: list[QAction]) -> None:
         for button in self.file_buttons:
@@ -98,7 +128,7 @@ class TitleBar(QWidget):
             button = QToolButton(self.left_group)
             button.setDefaultAction(action)
             button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-            button.setFixedSize(32, 28)
+            button.setFixedSize(32, 30)
             button.setIconSize(QSize(18, 18))
             button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             self.left_layout.addWidget(button)
@@ -134,19 +164,35 @@ class TitleBar(QWidget):
         background = "#20252d" if dark else "#f5f7fa"
         hover = "#384454" if dark else "#e0e7f0"
         pressed = "#46556a" if dark else "#cbd7e7"
+        disabled = "#7e8998" if dark else "#9299a3"
         self.setStyleSheet(
             f"#applicationTitleBar {{ background: {background}; color: {foreground}; }}"
             f"#applicationTitleBar QLabel {{ color: {foreground}; background: transparent;"
             " font-size: 10pt; font-weight: 300; }"
-            "#applicationTitleBar QToolButton { border: 0; background: transparent; padding: 0; }"
+            f"#applicationTitleBar QToolButton {{ color: {foreground}; border: 0;"
+            " background: transparent; padding: 0; border-radius: 5px; }"
+            "#applicationTitleBar QToolButton#windowControlButton,"
+            "#applicationTitleBar QToolButton#windowCloseButton { border-radius: 0; }"
             f"#applicationTitleBar QToolButton:hover {{ background: {hover}; }}"
             f"#applicationTitleBar QToolButton:pressed {{ background: {pressed}; }}"
+            f"#applicationTitleBar QToolButton:disabled {{ color: {disabled};"
+            " background: transparent; }"
             "#applicationTitleBar QToolButton#windowCloseButton:hover { background: #c42b1c; }"
             "#applicationTitleBar QToolButton#windowCloseButton:pressed { background: #a82217; }"
         )
         self.minimize_button.setIcon(outline_icon("minimize", foreground))
         self.close_button.setIcon(outline_icon("close", foreground))
         self.update_window_state()
+
+    def eventFilter(self, watched, event):
+        if watched is self.close_button and event.type() in (QEvent.Type.Enter, QEvent.Type.Leave):
+            color = (
+                "#ffffff"
+                if event.type() == QEvent.Type.Enter
+                else ("#e1e7ef" if self._dark else "#253047")
+            )
+            self.close_button.setIcon(outline_icon("close", color))
+        return super().eventFilter(watched, event)
 
     def update_window_state(self):
         maximized = self.owner.isMaximized()
@@ -211,13 +257,22 @@ class ChromeMainWindow(QMainWindow):
         super().__init__(parent)
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
         self.chrome_header = QWidget(self)
+        self.chrome_header.setObjectName("applicationChromeHeader")
         header_layout = QVBoxLayout(self.chrome_header)
         header_layout.setContentsMargins(0, 0, 0, 0)
         header_layout.setSpacing(0)
         self.title_bar = TitleBar(self)
-        self._chrome_menu = QMenuBar(self.chrome_header)
+        self.menu_row = QWidget(self.chrome_header)
+        self.menu_row.setObjectName("applicationMenuRow")
+        self._menu_row_layout = QHBoxLayout(self.menu_row)
+        self._menu_row_layout.setContentsMargins(6, 2, 6, 3)
+        self._menu_row_layout.setSpacing(6)
+        self._menu_leading_widget: QWidget | None = None
+        self._chrome_menu = QMenuBar(self.menu_row)
+        self._chrome_menu.setObjectName("applicationMenuBar")
+        self._menu_row_layout.addWidget(self._chrome_menu, 1)
         header_layout.addWidget(self.title_bar)
-        header_layout.addWidget(self._chrome_menu)
+        header_layout.addWidget(self.menu_row)
         self.setMenuWidget(self.chrome_header)
         edge = Qt.Edge
         self.resize_grips = [
@@ -235,22 +290,52 @@ class ChromeMainWindow(QMainWindow):
     def menuBar(self) -> QMenuBar:
         return self._chrome_menu
 
+    def set_menu_leading_widget(self, widget: QWidget) -> None:
+        """Keep a sidebar toggle separate from native menu action geometry."""
+        if self._menu_leading_widget is not None and self._menu_leading_widget is not widget:
+            self._menu_row_layout.removeWidget(self._menu_leading_widget)
+            self._menu_leading_widget.setParent(None)
+        self._menu_leading_widget = widget
+        widget.setParent(self.menu_row)
+        self._menu_row_layout.insertWidget(0, widget)
+        widget.show()
+
     def apply_chrome_theme(self, dark: bool) -> None:
         self.title_bar.apply_theme(dark)
-        colors = self.palette()
-        # Fusion draws a bottom rule under every menu item and empty area.
-        # Style both explicitly, preserving mnemonic and keyboard behavior.
-        # Resolve colors on every theme change; QSS palette() can retain the
-        # previous palette when a window changes theme after being shown.
+        foreground = "#e1e7ef" if dark else "#253047"
+        background = "#20252d" if dark else "#f5f7fa"
+        border = "#353e4b" if dark else "#dce2ea"
+        hover = "#303947" if dark else "#e5eaf1"
+        pressed = "#345480" if dark else "#c6dcff"
+        highlighted = "#ffffff" if dark else "#162b49"
+        disabled = "#7e8998" if dark else "#9299a3"
+        accent = "#88b9ff" if dark else "#346bc6"
+        self.chrome_header.setStyleSheet(
+            f"#applicationChromeHeader {{ background: {background}; }}"
+            f"#applicationMenuRow {{ background: {background}; color: {foreground};"
+            f" border: none; border-bottom: 1px solid {border}; }}"
+            f"#applicationMenuRow QToolButton {{ background: transparent; color: {foreground};"
+            " border: none; border-radius: 5px; padding: 0; }"
+            f"#applicationMenuRow QToolButton:hover {{ background: {hover}; }}"
+            f"#applicationMenuRow QToolButton:pressed,"
+            f"#applicationMenuRow QToolButton:checked {{ background: {pressed};"
+            f" color: {highlighted}; }}"
+            f"#applicationMenuRow QToolButton:disabled {{ color: {disabled};"
+            " background: transparent; }"
+            "#applicationMenuRow QToolButton#notebookSidebarToggle:focus {"
+            f" border: 1px solid {accent}; }}"
+        )
+        # Explicit colors avoid a stale palette when switching a visible window.
+        # Native menu item rules are removed; the menu row owns its bottom rule.
         self._chrome_menu.setStyleSheet(
-            f"QMenuBar {{ background: {colors.window().color().name()};"
-            f" color: {colors.windowText().color().name()};"
-            " border: none; padding: 0; font-size: 10pt; font-weight: 300; }"
-            "QMenuBar::item { background: transparent; border: none; padding: 8px 8px; }"
-            f"QMenuBar::item:selected {{ background: {colors.button().color().name()};"
+            f"QMenuBar {{ background: {background}; color: {foreground};"
+            " border: none; padding: 0; font-size: 10pt; font-weight: 400; }"
+            "QMenuBar::item { background: transparent; border: none; padding: 6px 9px; }"
+            f"QMenuBar::item:selected {{ background: {hover};"
             " border-radius: 4px; }"
-            f"QMenuBar::item:pressed {{ background: {colors.highlight().color().name()};"
-            f" color: {colors.highlightedText().color().name()}; border-radius: 4px; }}"
+            f"QMenuBar::item:pressed {{ background: {pressed};"
+            f" color: {highlighted}; border-radius: 4px; }}"
+            f"QMenuBar::item:disabled {{ color: {disabled}; }}"
         )
 
     def _update_chrome_state(self):

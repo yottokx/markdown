@@ -5,7 +5,7 @@
 | アプリ | 役割・現在の状態 | ソース・利用方法 |
 | --- | --- | --- |
 | Markdown Editor | 任意の `.md` ファイルを開くエディタ。継続してテスト・修正する | [apps/md-editor](apps/md-editor/README.md) |
-| MarkNotes | スクラップブック開発用のベース。現在は既存エディタからの独立コピーで、ノート管理機能は未実装 | [apps/marknotes](apps/marknotes/README.md) |
+| MarkNotes | タブ・自動保存・履歴・ピン・全文検索・添付管理を備えたMarkdownスクラップブック | [apps/marknotes](apps/marknotes/README.md) |
 
 ## 起動と環境構築
 
@@ -16,7 +16,7 @@
 uv --directory apps/md-editor sync --locked
 uv --directory apps/md-editor run --locked md-editor
 
-# MarkNotesの開発用ベース
+# MarkNotes
 uv --directory apps/marknotes sync --locked
 uv --directory apps/marknotes run --locked marknotes
 ```
@@ -49,6 +49,7 @@ uv --directory apps/marknotes run --locked pyinstaller --noconfirm packaging/mar
 - [整理作業の記録・検証結果](docs/project-reorganization.md)
 - [既存エディタの開発セッション記録](apps/md-editor/SESSION_SUMMARY.md)
 - [既存エディタの検証記録](apps/md-editor/VERIFICATION.md)
+- [MarkNotesの開発計画](apps/marknotes/PLAN.md)
 - [MarkNotesの取り込み元と範囲](apps/marknotes/docs/UPSTREAM.md)
 - [参考デモ](references/prompt_editor_demo/README.md)
 

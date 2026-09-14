@@ -109,7 +109,12 @@ def current_images(session, text: str) -> tuple[ManagedImage, ...]:
             relative = origin.relative_to(session.base_dir).as_posix()
         except ValueError:
             continue
-        path = managed_image_path(quote(relative, safe="/-._~"), session.base_dir)
+        resolver = getattr(session, "managed_image_path", None)
+        path = (
+            resolver(quote(relative, safe="/-._~"))
+            if resolver is not None
+            else managed_image_path(quote(relative, safe="/-._~"), session.base_dir)
+        )
         if path is None:
             continue
         image_format = _image_format(path)

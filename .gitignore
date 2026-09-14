@@ -14,3 +14,13 @@ wheels/
 .pytest_cache/
 .ruff_cache/
 artifacts/
+
+# Temporary files from saving, image renaming, backups and restores
+.*.tmp
+
+# MarkNotes Markdown export staging directories
+.marknotes-export-*/
+
+# Windows Explorer metadata
+Thumbs.db
+[Dd]esktop.ini

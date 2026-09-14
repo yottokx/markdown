@@ -13,6 +13,7 @@ import json
 import math
 import os
 from pathlib import Path
+from urllib.parse import quote
 
 from PySide6.QtCore import QObject, QUrl, Signal, Slot
 from PySide6.QtGui import QColor, QContextMenuEvent, QDesktopServices
@@ -26,6 +27,7 @@ from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QApplication, QMenu, QVBoxLayout, QWidget
 
 from .image_sources import resolve_srcsets
+from .managed_assets import resolve_managed_asset
 
 
 class _PreviewPage(QWebEnginePage):
@@ -34,6 +36,18 @@ class _PreviewPage(QWebEnginePage):
     def __init__(self, shell_url: QUrl, parent: QObject) -> None:
         super().__init__(parent)
         self._shell_url = shell_url
+        # Enabled only by the notebook shell for the currently displayed note.
+        self.managed_assets_base: Path | None = None
+
+    def _managed_link(self, url: QUrl) -> Path | None:
+        if self.managed_assets_base is None or not url.isLocalFile():
+            return None
+        try:
+            base = Path(self.managed_assets_base).absolute()
+            relative = Path(url.toLocalFile()).absolute().relative_to(base).as_posix()
+            return resolve_managed_asset(quote(relative, safe="/-._~"), base)
+        except (OSError, ValueError):
+            return None
 
     def _is_shell_url(self, url: QUrl) -> bool:
         return url.isLocalFile() and os.path.normcase(url.toLocalFile()) == os.path.normcase(
@@ -41,7 +55,11 @@ class _PreviewPage(QWebEnginePage):
         )
 
     def can_open_context_link(self, url: QUrl) -> bool:
-        return self._is_shell_url(url) or url.scheme().lower() in {"http", "https", "mailto"}
+        return (
+            self._is_shell_url(url)
+            or url.scheme().lower() in {"http", "https", "mailto"}
+            or self._managed_link(url) is not None
+        )
 
     def acceptNavigationRequest(
         self, url: QUrl, navigation_type: QWebEnginePage.NavigationType, is_main_frame: bool
@@ -50,11 +68,13 @@ class _PreviewPage(QWebEnginePage):
             return False
         if self._is_shell_url(url):
             return True
-        if (
-            navigation_type == QWebEnginePage.NavigationType.NavigationTypeLinkClicked
-            and url.scheme().lower() in {"http", "https", "mailto"}
-        ):
-            QDesktopServices.openUrl(url)
+        if navigation_type == QWebEnginePage.NavigationType.NavigationTypeLinkClicked:
+            if url.scheme().lower() in {"http", "https", "mailto"}:
+                QDesktopServices.openUrl(url)
+            elif (asset := self._managed_link(url)) is not None:
+                # Only an explicit click opens the validated, current-note file.
+                # Keep it out of the embedded browser and discard URL parameters.
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(asset)))
         return False
 
     def open_context_link(self, url: QUrl) -> None:

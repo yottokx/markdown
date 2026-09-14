@@ -1,7 +1,7 @@
 [project]
 name = "marknotes"
 version = "0.1.0"
-description = "Development base for the MarkNotes Markdown scrapbook application"
+description = "Local Markdown scrapbook with autosave, tabs, search and managed attachments"
 readme = "README.md"
 authors = [
     { name = "yotto", email = "yotto.kx@gmail.com" }

@@ -35,7 +35,7 @@ def set_windows_app_user_model_id() -> None:
 
 def application_icon() -> QIcon:
     """The same resource paths work in a source checkout and a PyInstaller bundle."""
-    icon = QIcon(str(RESOURCE_DIR / "app-icon.ico"))
+    icon = QIcon(str(RESOURCE_DIR / "marknotes-icon.ico"))
     # Keep the full PNG resolution available for larger and high-DPI surfaces.
-    icon.addFile(str(RESOURCE_DIR / "app-icon.png"))
+    icon.addFile(str(RESOURCE_DIR / "marknotes-icon.png"))
     return icon

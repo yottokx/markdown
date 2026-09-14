@@ -28,6 +28,7 @@ def python_position(text: str, position: int) -> int:
 
 class SearchBar(QWidget):
     navigated = Signal()
+    closed = Signal()
 
     def __init__(self, editor, parent=None):
         super().__init__(parent)
@@ -93,6 +94,7 @@ class SearchBar(QWidget):
         self.hide()
         self.editor.setExtraSelections([])
         self.editor.setFocus()
+        self.closed.emit()
 
     def _query_changed(self, *_args):
         self._last_span = None
