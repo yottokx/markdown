@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import re
 import sys
 import threading
 import time
@@ -12,6 +14,7 @@ from PySide6.QtCore import QBuffer, QEvent, QIODevice, QProcess, QSize, QStandar
 from PySide6.QtGui import QAction, QColor, QImage, QKeySequence, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
+    QDialog,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -29,6 +32,7 @@ from .clipboard import choose_paste
 from .document import SaveResult, decode_document
 from .image_actions import ImageRenameDialog
 from .image_rename import current_images
+from .local_links import LocalLinkDialog
 from .managed_assets import ManagedAssets, export_markdown, import_markdown
 from .notebook_runtime import BackgroundJobs, NoteDocument, NoteSession
 from .notebook_store import NotebookStore, find_match_ranges
@@ -66,6 +70,7 @@ class NotebookWindow(MainWindow):
         self._asset_signatures = {}
         self._sidebar_composing = False
         self._search_generation = 0
+        self._highlight_generation = 0
         self._search_cancel = threading.Event()
         self._library_query = ""
         self._sidebar_mode = "history"
@@ -104,8 +109,8 @@ class NotebookWindow(MainWindow):
         self.editor.source_position_changed.connect(self._schedule_view)
         self.preview.source_scrolled.connect(self._schedule_view)
         self.splitter.splitterMoved.connect(self._schedule_view)
-        self.search._timer.timeout.connect(self._apply_source_highlights)
-        self.search.closed.connect(self._apply_source_highlights)
+        self.search.refreshed.connect(self._apply_library_highlights)
+        self.search.closed.connect(self._apply_library_highlights)
         self._build_notebook_layout()
         self._notebook_ready = True
         self.format_label.hide()
@@ -173,6 +178,11 @@ class NotebookWindow(MainWindow):
         add(self.view_menu, "前のタブ", lambda: self.cycle_tab(-1), "Ctrl+Shift+Tab")
         add(self.view_menu, "サイドバー", self.toggle_sidebar, "Ctrl+B")
         add(self.insert_menu, "添付ファイル…", self.insert_attachment_dialog)
+        add(
+            self.insert_menu,
+            "ローカルパスへのリンク…",
+            lambda: self._with_source_visible(self.insert_local_link_dialog),
+        )
         tools = self.menuBar().actions()[4].menu()
         for action in list(tools.actions()):
             if action.text() == "中断した画像操作を復旧…":
@@ -285,6 +295,7 @@ class NotebookWindow(MainWindow):
         self.sidebar.set_fixed(self._sidebar_fixed)
         self.sidebar.note_requested.connect(self._result_selected)
         self.sidebar.delete_requested.connect(self.delete_note)
+        self.sidebar.note_pin_requested.connect(self.set_note_pinned)
         self.sidebar.query_changed.connect(self._query_changed)
         self.sidebar.mode_changed.connect(self._sidebar_mode_changed)
         self.sidebar.date_order_changed.connect(self._date_order_changed)
@@ -446,6 +457,7 @@ class NotebookWindow(MainWindow):
         self.session = state.adapter
         self.base_dir = state.adapter.base_dir
         self.preview.page().managed_assets_base = self.base_dir
+        self.preview.page().allow_local_links = True
         self.path = None
         self.editor.markdown_context = state.context
         self.editor.highlighter = state.highlighter
@@ -523,6 +535,7 @@ class NotebookWindow(MainWindow):
         self.session = NoteDocument(self.store.root / "notes")
         self.base_dir = self.session.base_dir
         self.preview.page().managed_assets_base = None
+        self.preview.page().allow_local_links = False
         self.search.close_bar()
         self.pages.setCurrentIndex(1)
         self._loading = False
@@ -940,12 +953,18 @@ class NotebookWindow(MainWindow):
             return
         note_id = self._active
         pinned = not bool(self._summaries[note_id].get("pinned"))
+        self.set_note_pinned(note_id, pinned)
+
+    def set_note_pinned(self, note_id: str, pinned: bool):
+        if self._busy or self._shutdown_done or self._closing:
+            return
 
         def done(_value, error):
             if error:
                 self._storage_error(error)
                 return
-            self._summaries[note_id]["pinned"] = pinned
+            if note_id in self._summaries:
+                self._summaries[note_id]["pinned"] = pinned
             self._refresh_tabs()
             self.refresh_library()
 
@@ -1175,7 +1194,8 @@ class NotebookWindow(MainWindow):
         self.editor.setExtraSelections(selections)
 
     def _apply_library_highlights(self):
-        if not self._notebook_ready:
+        """Use note-local search in both panes while its bar is open, otherwise library search."""
+        if not self._notebook_ready or self._shutdown_done or self._closing:
             return
         self._apply_source_highlights()
         matches = (
@@ -1184,16 +1204,70 @@ class NotebookWindow(MainWindow):
             else ()
         )
         self.library_match_label.setText(f"検索: {self._library_query} · {len(matches)} 件一致")
-        from .notebook_highlight import preview_highlight_script
+        from .notebook_highlight import preview_highlight_script, preview_search_ranges_script
 
+        self._highlight_generation += 1
+        generation = self._highlight_generation
+        revision = self._revision
+        note_id = self._active or ""
+        local_search = bool(self._active and self.search.isVisible())
         self.preview.page().runJavaScript(
             preview_highlight_script(
-                self._library_query,
-                self._revision,
-                generation=self._search_generation,
-                note_id=self._active or "",
+                "" if local_search else self._library_query,
+                revision,
+                generation=generation,
+                note_id=note_id,
             )
         )
+        self.preview.page().runJavaScript(
+            preview_search_ranges_script([], revision, generation=generation, note_id=note_id)
+        )
+        if local_search:
+            self._apply_note_search_highlights(revision, generation, note_id)
+
+    def _apply_note_search_highlights(self, revision, generation, note_id):
+        from .notebook_highlight import (
+            preview_search_match_ranges,
+            preview_search_ranges_script,
+            preview_search_text_script,
+        )
+
+        try:
+            pattern = self.search.pattern()
+        except re.error:
+            return
+        if pattern is None:
+            return
+
+        def collected(raw):
+            if (
+                self._shutdown_done
+                or self._closing
+                or generation != self._highlight_generation
+                or revision != self._revision
+                or note_id != self._active
+                or not self.search.isVisible()
+            ):
+                return
+            try:
+                result = json.loads(raw) if isinstance(raw, str) else None
+            except (TypeError, ValueError):
+                return
+            if not isinstance(result, dict) or not result.get("applied"):
+                return
+            ranges = preview_search_match_ranges(pattern, result.get("runs", []))
+            self.preview.page().runJavaScript(
+                preview_search_ranges_script(
+                    ranges, revision, generation=generation, note_id=note_id
+                )
+            )
+
+        script = (
+            preview_search_text_script(revision, generation=generation, note_id=note_id)
+            .strip()
+            .removesuffix(";")
+        )
+        self.preview.page().runJavaScript(f"JSON.stringify({script})", collected)
 
     def _preview_ready(self, revision):
         super()._preview_ready(revision)
@@ -1225,6 +1299,29 @@ class NotebookWindow(MainWindow):
             self._attach(lambda manager: manager.save_bytes(data, ".png", "画像"))
         else:
             self.insert_text(decision.text)
+
+    def insert_local_link_dialog(self):
+        if not self._active or self._busy or self.editor.isReadOnly():
+            return
+        note_id = self._active
+        cursor = QTextCursor(self.editor.textCursor())
+        dialog = LocalLinkDialog(
+            self,
+            label=cursor.selectedText().replace("\u2029", " "),
+            directory=self.dialog_directory(),
+        )
+        try:
+            if (
+                dialog.exec() == QDialog.DialogCode.Accepted
+                and self._active == note_id
+                and not self._busy
+                and not self._closing
+                and not self.editor.isReadOnly()
+            ):
+                self.editor.setTextCursor(cursor)
+                self.insert_text(dialog.markdown)
+        finally:
+            dialog.deleteLater()
 
     def insert_attachment_dialog(self):
         if not self._active:

@@ -1,7 +1,7 @@
 """Navigation behavior that does not require an editor or live note library."""
 
 import pytest
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QEvent, QPoint, Qt
 from PySide6.QtGui import QContextMenuEvent
 from PySide6.QtWidgets import QApplication, QMenu, QTabBar, QVBoxLayout, QWidget
 
@@ -527,7 +527,7 @@ def test_sidebar_delete_uses_right_clicked_card_in_every_mode(
     assert len(constructed_menus) == 1
     assert deleted == []
     menu = constructed_menus[-1]
-    assert [action.text() for action in menu.actions()] == ["ノートを削除…"]
+    assert [action.text() for action in menu.actions()] == ["ピン止めを解除", "", "ノートを削除…"]
     trigger_delete(menu)
     assert deleted == ["b"]
     assert opened == []
@@ -567,3 +567,135 @@ def test_replaced_search_card_keeps_delete_menu_and_stale_action_is_ignored(
     sidebar.set_results([{"id": "another", "title": "another"}])
     trigger_delete(menu)
     assert deleted == ["note"]
+
+
+@pytest.mark.parametrize("mode", ["history", "pinned", "search"])
+@pytest.mark.parametrize("pinned", [False, True])
+def test_sidebar_pin_targets_context_note_without_opening(sidebar, constructed_menus, mode, pinned):
+    requested, opened = [], []
+    sidebar.note_pin_requested.connect(lambda *args: requested.append(args))
+    sidebar.note_requested.connect(lambda *args: opened.append(args))
+    sidebar.set_mode(mode)
+    sidebar.set_results(
+        [
+            {"id": "a", "title": "first"},
+            {"id": "b", "title": "second", "pinned": pinned},
+        ]
+    )
+    sidebar.results.setCurrentItem(sidebar._cards[0][0])
+    card = sidebar._cards[1][1]
+    point = QPoint(5, 5)
+    QApplication.sendEvent(
+        card.label,
+        QContextMenuEvent(QContextMenuEvent.Reason.Mouse, point, card.label.mapToGlobal(point)),
+    )
+    action = constructed_menus[-1].actions()[0]
+    assert action.text() == ("ピン止めを解除" if pinned else "ノートをピン止め")
+    action.trigger()
+    assert requested == [("b", not pinned)]
+    assert opened == []
+    assert card.result["pinned"] is pinned  # Persistence belongs to the window.
+    sidebar.set_results([{"id": "a", "title": "first"}])
+    action.trigger()
+    assert requested == [("b", not pinned)]
+
+
+@pytest.mark.parametrize("mode", ["history", "pinned", "search"])
+@pytest.mark.parametrize("pinned", [False, True])
+def test_card_pin_button_emits_target_without_opening(qtbot, sidebar, mode, pinned):
+    requested, opened = [], []
+    sidebar.note_pin_requested.connect(lambda *args: requested.append(args))
+    sidebar.note_requested.connect(lambda *args: opened.append(args))
+    sidebar.set_mode(mode)
+    sidebar.set_results(
+        [
+            {"id": "a", "title": "first"},
+            {"id": "b", "title": "長いノート名" * 12, "pinned": pinned},
+        ]
+    )
+    sidebar.results.setCurrentItem(sidebar._cards[0][0])
+    for width, dark in [(320, False), (500, True), (250, False)]:
+        sidebar.resize(width, 500)
+        sidebar.apply_theme(dark)
+        card = sidebar._cards[1][1]
+        button = card.pin_button
+        qtbot.waitUntil(
+            lambda button=button, card=card: button.x() > card.content.geometry().right()
+        )
+        assert card.rect().contains(button.geometry())
+        assert button.y() == card.label.mapTo(card, QPoint()).y()
+        assert card.label.height() >= card.label.heightForWidth(card.label.width())
+        assert button.isChecked() is pinned
+        assert button.text() == ""
+        assert not button.icon().isNull()
+        assert button.toolTip() == ("ピン止めを解除" if pinned else "ノートをピン止め")
+        assert "長いノート名" in button.accessibleName()
+        qtbot.mouseClick(button, Qt.MouseButton.LeftButton)
+        assert requested[-1] == ("b", not pinned)
+        assert button.isChecked() is pinned
+    assert opened == []
+    assert sidebar.results.currentItem() is sidebar._cards[0][0]
+
+
+def test_pin_button_still_works_after_search_snippets_are_replaced(qtbot, sidebar):
+    requested = []
+    sidebar.note_pin_requested.connect(lambda *args: requested.append(args))
+    sidebar.set_mode("search")
+    sidebar.set_results([{"id": "a", "title": "title", "pinned": True}])
+    sidebar.set_note_snippets("a", [{"text": "match", "matches": [(0, 5)]}], 1)
+    button = sidebar._cards[0][1].pin_button
+    button.setFocus()
+    qtbot.keyClick(button, Qt.Key.Key_Space)
+    assert requested == [("a", False)]
+    assert button.isChecked()
+
+
+def test_pinned_tab_and_overflow_show_only_the_note_title(tabs, constructed_menus):
+    notes = sample_notes()
+    tabs.set_notes(notes)
+    for index, note in enumerate(notes):
+        assert tabs.tab_bar.tabText(index) == note["title"]
+    tabs.set_active("a")
+    tabs.resize(100, 34)
+    assert "b" in tabs.hidden_note_ids
+    tabs._show_overflow()
+    labels = [action.text() for action in constructed_menus[-1].actions()]
+    assert "second" in labels
+    assert "● second" not in labels
+
+
+@pytest.mark.parametrize("dark", [False, True])
+@pytest.mark.parametrize("mode", ["history", "pinned", "search"])
+def test_note_hover_and_pin_hover_have_separate_backgrounds(qtbot, sidebar, dark, mode):
+    sidebar.set_mode(mode)
+    sidebar.apply_theme(dark)
+    sidebar.set_results([{"id": "a", "title": "ノート", "excerpt": "本文の抜粋"}])
+    card = sidebar._cards[0][1]
+    QApplication.processEvents()
+    card.layout().activate()
+    assert card.content.geometry().right() < card.pin_button.x()
+    hover = notebook_widgets._navigation_colors(dark)["hover"]
+    content_point = QPoint(2, card.content.height() // 2)
+    pin_point = QPoint(3, card.pin_button.height() // 2)
+
+    def content_color():
+        return card.content.grab().toImage().pixelColor(content_point).name()
+
+    def pin_color():
+        return card.pin_button.grab().toImage().pixelColor(pin_point).name()
+
+    def set_hover(widget, hovered):
+        # Offscreen windows do not reliably receive native cursor enter/leave events.
+        widget.setAttribute(Qt.WidgetAttribute.WA_UnderMouse, hovered)
+        QApplication.sendEvent(widget, QEvent(QEvent.Type.Enter if hovered else QEvent.Type.Leave))
+        widget.update()
+
+    set_hover(card, True)
+    set_hover(card.pin_button, False)
+    set_hover(card.content, True)
+    assert content_color() == hover
+    assert pin_color() != hover
+    set_hover(card.content, False)
+    set_hover(card.pin_button, True)
+    assert pin_color() == hover
+    assert content_color() != hover

@@ -210,3 +210,55 @@ def test_close_clears_highlights_and_theme_does_not_change_source(search):
     assert editor.extraSelections() == []
     bar.refresh()
     assert editor.extraSelections() == []
+
+
+def test_navigation_reuses_matches_without_refreshing_highlights(search, monkeypatch):
+    editor, bar = prepare(search, "😀cat cat CAT", "cat")
+    matches = bar._matches
+    refreshed = []
+    bar.refreshed.connect(lambda: refreshed.append(True))
+
+    def unexpected_refresh():
+        pytest.fail("Unchanged search navigation must not rebuild highlights")
+
+    monkeypatch.setattr(bar, "refresh", unexpected_refresh)
+    for move, expected in (
+        (bar.next, (2, 5)),
+        (bar.next, (6, 9)),
+        (bar.next, (10, 13)),
+        (bar.next, (2, 5)),
+        (bar.previous, (10, 13)),
+    ):
+        move()
+        assert span(editor) == expected
+    assert bar._matches is matches
+    assert refreshed == []
+    assert len(editor.extraSelections()) == 3
+    assert bar.status.text() == "3 / 3 件"
+
+
+def test_navigation_refreshes_pending_edits_and_undo_redo_before_timer(search):
+    editor, bar = prepare(search, "cat cat", "cat")
+    refreshed = []
+    bar.refreshed.connect(lambda: refreshed.append(True))
+    editor.insertPlainText("😀 ")
+    assert bar._timer.isActive()
+    bar.next()
+    assert span(editor) == (3, 6)
+    assert len(refreshed) == 1
+    assert not bar._timer.isActive()
+    assert [m.span() for m in bar._matches] == [(2, 5), (6, 9)]
+
+    editor.undo()
+    cursor_at(editor, 0)
+    bar.next()
+    assert span(editor) == (0, 3)
+    assert len(refreshed) == 2
+    editor.redo()
+    cursor_at(editor, 0)
+    bar.next()
+    assert span(editor) == (3, 6)
+    assert len(refreshed) == 3
+    bar.next()
+    assert span(editor) == (7, 10)
+    assert len(refreshed) == 3

@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from html import escape
+from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import urlsplit
 from uuid import uuid4
@@ -13,11 +14,12 @@ import nh3
 from markdown_it import MarkdownIt
 from markdown_it.renderer import RendererHTML
 from markdown_it.token import Token
-from mdit_py_plugins.tasklists import tasklists_plugin
 
 from .code_highlighting import highlight_code_lines
 from .image_sources import parse_srcset
+from .link_schemes import is_safe_link, link_scheme
 from .math_parser import math_plugin
+from .task_lists import tasklists_plugin
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +28,7 @@ class RenderedDocument:
 
     html: str
     line_count: int
+    task_markers: tuple[tuple[int, int], ...] = ()
 
 
 _TAGS = {
@@ -123,9 +126,29 @@ def _image_attribute(tag: str, attribute: str, value: str) -> str | None:
         )
     if attribute == "src" and tag == "img":
         return value if _safe_image_url(value) else None
-    if attribute == "href" and re.sub(r"[\x00-\x20]", "", value).lower().startswith("data:"):
-        return None
+    if attribute == "href":
+        return value if is_safe_link(value) else None
     return value
+
+
+class _LinkSchemes(HTMLParser):
+    """Allow the document's custom link schemes without broadening image URLs."""
+
+    def __init__(self, fragment: str) -> None:
+        super().__init__(convert_charrefs=True)
+        self.schemes = {"http", "https", "mailto", "file", "data"}
+        self.feed(fragment)
+
+    def handle_starttag(self, tag, attrs) -> None:
+        if tag == "a":
+            for name, value in attrs:
+                if (
+                    name == "href"
+                    and value
+                    and is_safe_link(value)
+                    and (scheme := link_scheme(value))
+                ):
+                    self.schemes.add(scheme)
 
 
 def _sanitize(fragment: str, *, source_attributes: bool = False) -> str:
@@ -135,12 +158,13 @@ def _sanitize(fragment: str, *, source_attributes: bool = False) -> str:
     if source_attributes:
         attributes["*"].update(_SOURCE_ATTRIBUTES | {"data-render-kind"})
         attributes["code"] = {"data-code-source"}
+        attributes["input"].update({"data-task-line", "data-task-column"})
     return nh3.clean(
         fragment,
         tags=_TAGS,
         attributes=attributes,
         clean_content_tags={"script", "style", "iframe", "object", "template"},
-        url_schemes={"http", "https", "mailto", "file", "data"},
+        url_schemes=_LinkSchemes(fragment).schemes,
         attribute_filter=_image_attribute,
         strip_comments=True,
         link_rel="noopener noreferrer",
@@ -157,7 +181,7 @@ class _SourceRenderer(RendererHTML):
         super().__init__(parser)
 
     def renderInline(self, tokens: list[Token], options: Any, env: dict[str, Any]) -> str:
-        # Clean paired inline HTML together. Generated math travels through the
+        # Clean paired inline HTML together. Generated controls/math travel through the
         # sanitizer as unpredictable plain-text markers, so raw HTML can never
         # acquire its private rendering attributes or impersonate a source map.
         protected: dict[str, str] = {}
@@ -180,6 +204,17 @@ class _SourceRenderer(RendererHTML):
             else:
                 parts.append(super().renderInlineAsText([token], options, env))
         return "".join(parts)
+
+    def task_checkbox(self, tokens, idx, options, env) -> str:
+        task = tokens[idx].meta
+        checked = ' checked="checked"' if task["checked"] else ""
+        fragment = (
+            '<input class="task-list-item-checkbox" type="checkbox"'
+            f' data-task-line="{task["line"]}" data-task-column="{task["column"]}"{checked}>'
+        )
+        marker = "\ue000task-checkbox-" + uuid4().hex + "\ue001"
+        self._protected_inline[-1][marker] = fragment
+        return marker
 
     def _inline_math(self, token: Token, *, display: bool) -> str:
         kind = "math-block" if display else "math-inline"
@@ -285,7 +320,7 @@ def render_markdown(source: str) -> RenderedDocument:
     # absolute file URIs. Page navigation remains restricted by PreviewPage.
     parser.validateLink = lambda url: urlsplit(url).scheme.lower() == "file" or validate_link(url)
     parser.enable(["table", "strikethrough"])
-    parser.use(tasklists_plugin, enabled=False)
+    parser.use(tasklists_plugin)
     parser.use(math_plugin)
     env: dict[str, Any] = {}
     tokens = parser.parse(source, env)
@@ -306,4 +341,5 @@ def render_markdown(source: str) -> RenderedDocument:
     return RenderedDocument(
         html=_sanitize(html, source_attributes=True),
         line_count=len(source.split("\n")),
+        task_markers=tuple(env.get("task_markers", ())),
     )

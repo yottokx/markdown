@@ -59,6 +59,7 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 1.4em 0; }
 a { color: #245ccd; text-decoration: none; }
 a:hover { text-decoration: underline; }
 input[type="checkbox"] { accent-color: #456ed2; margin-right: .4em; }
+input[type="checkbox"][data-task-line][data-task-column]:enabled { cursor: pointer; }
 @media (max-width: 480px) { #content { padding-right: 18px; padding-left: 18px; } }
 th[align="center"], td[align="center"] { text-align: center; }
 th[align="right"], td[align="right"] { text-align: right; }

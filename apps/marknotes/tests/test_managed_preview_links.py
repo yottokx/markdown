@@ -110,3 +110,38 @@ def test_setting_a_preview_document_does_not_enable_managed_links(qtbot, tmp_pat
     qtbot.addWidget(pane)
     pane.set_document("<p>text</p>", 1, tmp_path, 1)
     assert pane.page().managed_assets_base is None
+
+
+@pytest.mark.parametrize("kind", ["file", "folder"])
+def test_notebook_local_links_open_existing_targets_only_on_explicit_click(
+    page, opened, tmp_path, kind
+):
+    path = tmp_path / "外部 [資料] #100%.txt"
+    if kind == "file":
+        path.write_text("unchanged", encoding="utf-8")
+    else:
+        path.mkdir()
+    url = QUrl.fromLocalFile(str(path))
+    page.allow_local_links = True
+    assert page.can_open_context_link(url)
+    for navigation in (
+        QWebEnginePage.NavigationType.NavigationTypeOther,
+        QWebEnginePage.NavigationType.NavigationTypeRedirect,
+        QWebEnginePage.NavigationType.NavigationTypeFormSubmitted,
+    ):
+        assert not page.acceptNavigationRequest(url, navigation, True)
+    assert not page.acceptNavigationRequest(
+        url, QWebEnginePage.NavigationType.NavigationTypeLinkClicked, False
+    )
+    assert not opened
+    assert not page.acceptNavigationRequest(
+        url, QWebEnginePage.NavigationType.NavigationTypeLinkClicked, True
+    )
+    page.open_context_link(url)
+    assert [Path(item.toLocalFile()) for item in opened] == [path, path]
+    missing = QUrl.fromLocalFile(str(tmp_path / "missing"))
+    assert not page.can_open_context_link(missing)
+    page.open_context_link(missing)
+    page.allow_local_links = False
+    page.open_context_link(url)
+    assert len(opened) == 2

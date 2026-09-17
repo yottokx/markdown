@@ -337,6 +337,7 @@ def test_context_menu_detects_only_real_table(paste_window, monkeypatch, source,
     assert menus[0]["formats"] == {
         "プレーンテキストとして貼り付け": True,
         "Markdownとして貼り付け": True,
+        "リンクとして貼り付け": False,
         "コードブロックとして貼り付け": True,
         "引用として貼り付け": True,
         "表として貼り付け…": True,
@@ -416,7 +417,12 @@ def test_format_paste_submenu_disables_unavailable_formats(paste_window):
     QApplication.clipboard().setText("A\tB\n1\t2")
     window.refresh_clipboard_actions()
     assert window.paste_format_menu.isEnabled()
-    assert all(action.isEnabled() for action in window.paste_format_menu.actions())
+    assert not window.link_paste_action.isEnabled()
+    assert all(
+        action.isEnabled()
+        for action in window.paste_format_menu.actions()
+        if action is not window.link_paste_action
+    )
 
 
 def test_standard_paste_preserves_and_renders_inline_tex(qtbot, paste_window):

@@ -1,14 +1,18 @@
 """Real notebook windows against isolated libraries, including asynchronous saves."""
 
+import json
 import sqlite3
 import threading
 from contextlib import closing
+from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 from PySide6.QtCore import QCoreApplication, QEvent, QMimeData, QSettings, Qt, QUrl
 from PySide6.QtGui import QColor, QImage, QInputMethodEvent, QTextCursor
 from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton
 
+from marknotes import app as app_module
 from marknotes import notebook as notebook_module
 from marknotes.managed_assets import ManagedAssets
 from marknotes.notebook import NotebookWindow
@@ -269,6 +273,293 @@ def test_library_search_highlights_each_hit_without_modifying_body_undo_or_view(
         javascript(qtbot, window, "CSS.highlights.get('marknotes-library-search')?.size || 0") == 0
     )
     assert window.editor.document().availableUndoSteps() == undo_steps
+
+
+def wait_note_search_highlights(qtbot, window, expected, *, source=None):
+    expected_source = expected if source is None else source
+    qtbot.waitUntil(
+        lambda: (
+            [s.cursor.selectedText() for s in window.editor.extraSelections()] == expected_source
+        ),
+        timeout=15000,
+    )
+    qtbot.waitUntil(
+        lambda: (
+            json.loads(
+                javascript(
+                    qtbot,
+                    window,
+                    "JSON.stringify(Array.from(CSS.highlights.get('marknotes-note-search') || [], "
+                    "range => range.toString()))",
+                )
+            )
+            == expected
+        ),
+        timeout=15000,
+    )
+
+
+def test_note_search_highlights_both_panes_without_changing_note_or_preview(qtbot, make_notebook):
+    window = make_notebook()
+    note_id = new_note(
+        qtbot,
+        window,
+        "# 😀メモ\n最初の**メモ**と二つ目のメモ\n\n[メモ](https://example.com/hidden)",
+    )
+    saved(qtbot, window)
+    before = window.store.get(note_id)
+    undo_steps = window.editor.document().availableUndoSteps()
+    qtbot.waitUntil(lambda: window._rendered_revision == window._revision, timeout=15000)
+    preview_before = javascript(qtbot, window, "document.getElementById('content').innerHTML")
+
+    window.show_search()
+    window.search.query.setText("メモ")
+    wait_note_search_highlights(qtbot, window, ["メモ"] * 4)
+
+    assert window.display_mode == "split"
+    assert (
+        javascript(qtbot, window, "document.getElementById('content').innerHTML") == preview_before
+    )
+    assert window.editor.toPlainText() == before.body
+    assert window.editor.document().availableUndoSteps() == undo_steps
+    assert not window._sessions[note_id].dirty
+    after = window.store.get(note_id)
+    assert after.updated_at == before.updated_at
+    assert after.revision == before.revision
+
+
+def test_note_search_options_and_invalid_query_update_both_panes(qtbot, make_notebook):
+    window = make_notebook()
+    new_note(qtbot, window, "# 😀Regex\nAlpha alpha ALPHA\nNamed42 named7\n\n**Split**Text")
+    window.show_search()
+    window.search.query.setText("alpha")
+    wait_note_search_highlights(qtbot, window, ["Alpha", "alpha", "ALPHA"])
+
+    window.search.case_sensitive.setChecked(True)
+    wait_note_search_highlights(qtbot, window, ["alpha"])
+    window.search.case_sensitive.setChecked(False)
+    window.search.regex.setChecked(True)
+    window.search.query.setText(r"(?P<word>named)\d+")
+    wait_note_search_highlights(qtbot, window, ["Named42", "named7"])
+
+    window.search.query.setText("[")
+    wait_note_search_highlights(qtbot, window, [])
+    assert "正規表現エラー" in window.search.status.text()
+
+    window.search.regex.setChecked(False)
+    window.search.query.setText("SplitText")
+    wait_note_search_highlights(qtbot, window, ["SplitText"], source=[])
+    window.search.query.clear()
+    wait_note_search_highlights(qtbot, window, [])
+
+
+def test_note_search_regex_uses_document_boundaries_in_both_panes(qtbot, make_notebook):
+    window = make_notebook()
+    new_note(qtbot, window, "needle\n\nneedle")
+    window.show_search()
+    window.search.regex.setChecked(True)
+
+    for query, source_start in (
+        (r"^needle", 0),
+        (r"\Aneedle", 0),
+        (r"needle$", 8),
+        (r"needle\Z", 8),
+        (r"(?<=\n)needle", 8),
+    ):
+        window.search.query.clear()
+        wait_note_search_highlights(qtbot, window, [])
+        window.search.query.setText(query)
+        wait_note_search_highlights(qtbot, window, ["needle"])
+        assert window.editor.extraSelections()[0].cursor.selectionStart() == source_start
+        highlighted_block = javascript(
+            qtbot,
+            window,
+            "(() => {"
+            "const range = Array.from(CSS.highlights.get('marknotes-note-search'))[0];"
+            "const block = range.startContainer.parentElement.closest('p');"
+            "return Array.from(document.querySelectorAll('#content p')).indexOf(block);"
+            "})()",
+        )
+        assert highlighted_block == (0 if source_start == 0 else 1), query
+
+
+def test_note_search_temporarily_overrides_and_restores_library_highlights(qtbot, make_notebook):
+    window = make_notebook()
+    new_note(qtbot, window, "# global global\nlocal local")
+    saved(qtbot, window)
+    qtbot.waitUntil(lambda: window._rendered_revision == window._revision, timeout=15000)
+    window.show_library_search()
+    window.sidebar.set_query("global", emit=True)
+    qtbot.waitUntil(
+        lambda: [s.cursor.selectedText() for s in window.editor.extraSelections()] == ["global"] * 2
+    )
+    qtbot.waitUntil(
+        lambda: (
+            javascript(qtbot, window, "CSS.highlights.get('marknotes-library-search')?.size || 0")
+            == 2
+        )
+    )
+
+    window.show_search()
+    window.search.query.setText("local")
+    wait_note_search_highlights(qtbot, window, ["local"] * 2)
+    assert (
+        javascript(qtbot, window, "CSS.highlights.get('marknotes-library-search')?.size || 0") == 0
+    )
+    window.sidebar.set_query("GLOBAL", emit=True)
+    wait_note_search_highlights(qtbot, window, ["local"] * 2)
+    assert (
+        javascript(qtbot, window, "CSS.highlights.get('marknotes-library-search')?.size || 0") == 0
+    )
+
+    window.search.query.clear()
+    wait_note_search_highlights(qtbot, window, [])
+    assert (
+        javascript(qtbot, window, "CSS.highlights.get('marknotes-library-search')?.size || 0") == 0
+    )
+    window.search.close_bar()
+    qtbot.waitUntil(
+        lambda: [s.cursor.selectedText() for s in window.editor.extraSelections()] == ["global"] * 2
+    )
+    qtbot.waitUntil(
+        lambda: (
+            javascript(qtbot, window, "CSS.highlights.get('marknotes-library-search')?.size || 0")
+            == 2
+        )
+    )
+    assert javascript(qtbot, window, "CSS.highlights.get('marknotes-note-search')?.size || 0") == 0
+
+    # A hidden SearchBar's delayed editor refresh must not erase restored highlights.
+    window.editor.moveCursor(QTextCursor.MoveOperation.End)
+    window.editor.insertPlainText(" global")
+    qtbot.waitUntil(lambda: window._rendered_revision == window._revision, timeout=15000)
+    qtbot.waitUntil(lambda: not window.search._timer.isActive())
+    assert [s.cursor.selectedText() for s in window.editor.extraSelections()] == ["global"] * 3
+    qtbot.waitUntil(
+        lambda: (
+            javascript(qtbot, window, "CSS.highlights.get('marknotes-library-search')?.size || 0")
+            == 3
+        )
+    )
+
+
+def test_note_search_tracks_edits_replacements_undo_tabs_and_rerender(qtbot, make_notebook):
+    window = make_notebook()
+    first = new_note(qtbot, window, "# First\nneedle needle")
+    second = new_note(qtbot, window, "# Second\nneedle once")
+    activate(qtbot, window, first)
+    window.show_search(replace=True)
+    window.search.query.setText("needle")
+    wait_note_search_highlights(qtbot, window, ["needle"] * 2)
+
+    window.editor.moveCursor(QTextCursor.MoveOperation.End)
+    window.editor.insertPlainText(" needle")
+    wait_note_search_highlights(qtbot, window, ["needle"] * 3)
+    window.search.replacement.setText("changed")
+    window.search.replace_all()
+    qtbot.waitUntil(lambda: window._rendered_revision == window._revision, timeout=15000)
+    wait_note_search_highlights(qtbot, window, [])
+    assert window.editor.toPlainText() == "# First\nchanged changed changed"
+    window.editor.undo()
+    wait_note_search_highlights(qtbot, window, ["needle"] * 3)
+
+    activate(qtbot, window, second)
+    wait_note_search_highlights(qtbot, window, ["needle"])
+    activate(qtbot, window, first)
+    wait_note_search_highlights(qtbot, window, ["needle"] * 3)
+    with qtbot.waitSignal(window.preview.ready, timeout=15000):
+        window._render()
+    wait_note_search_highlights(qtbot, window, ["needle"] * 3)
+
+
+def test_note_search_navigation_preserves_preview_and_highlights(qtbot, make_notebook, monkeypatch):
+    window = make_notebook()
+    body = "# 😀Search\nneedle first\n\nneedle second\n\nneedle third"
+    new_note(qtbot, window, body)
+    saved(qtbot, window)
+    window.show_search()
+    window.search.query.setText("needle")
+    window.editor.moveCursor(QTextCursor.MoveOperation.Start)
+    qtbot.waitUntil(
+        lambda: (
+            window._rendered_revision == window._revision
+            and not window._render_timer.isActive()
+            and not window._highlight_timer.isActive()
+            and not window.search._timer.isActive()
+        ),
+        timeout=15000,
+    )
+    wait_note_search_highlights(qtbot, window, ["needle"] * 3)
+    generation = window._highlight_generation
+    assert (
+        javascript(
+            qtbot,
+            window,
+            "(() => {"
+            "const content = document.getElementById('content');"
+            "const highlight = CSS.highlights.get('marknotes-note-search');"
+            "window.noteSearchNavigationBaseline = {"
+            "highlight, ranges: Array.from(highlight),"
+            "texts: Array.from(highlight, range => range.toString()),"
+            "html: content.innerHTML, nodes: Array.from(content.childNodes)};"
+            "return highlight.size;"
+            "})()",
+        )
+        == 3
+    )
+    rendered = Mock(wraps=app_module.render_markdown)
+    set_document = Mock(wraps=window.preview.set_document)
+    monkeypatch.setattr(app_module, "render_markdown", rendered)
+    monkeypatch.setattr(window.preview, "set_document", set_document)
+
+    offsets = [
+        qt_position(body, body.index(f"needle {name}")) for name in ("first", "second", "third")
+    ]
+    for navigate, index in (
+        (window.search.next, 0),
+        (window.search.next, 1),
+        (window.search.previous, 0),
+        (window.search.previous, 2),
+        (window.search.next, 0),
+        (window.search.next, 1),
+        (window.search.next, 2),
+        (window.search.next, 0),
+    ):
+        navigate()
+        cursor = window.editor.textCursor()
+        assert cursor.selectionStart() == offsets[index]
+        assert cursor.selectedText() == "needle"
+        assert window.search.status.text() == f"{index + 1} / 3 件"
+        assert window._highlight_generation == generation
+        assert javascript(
+            qtbot,
+            window,
+            "(() => {"
+            "const before = window.noteSearchNavigationBaseline;"
+            "const content = document.getElementById('content');"
+            "const highlight = CSS.highlights.get('marknotes-note-search');"
+            "const ranges = Array.from(highlight || []);"
+            "return highlight === before.highlight && ranges.length === before.ranges.length && "
+            "ranges.every((range, i) => range === before.ranges[i] && "
+            "range.toString() === before.texts[i]) && content.innerHTML === before.html && "
+            "content.childNodes.length === before.nodes.length && "
+            "Array.from(content.childNodes).every((node, i) => node === before.nodes[i]);"
+            "})()",
+        )
+
+    # Let any accidentally queued debounce finish before checking for redraws.
+    qtbot.wait(
+        max(
+            window._render_timer.interval(),
+            window._highlight_timer.interval(),
+            window.search._timer.interval(),
+        )
+        + 30
+    )
+    assert window._highlight_generation == generation
+    rendered.assert_not_called()
+    set_document.assert_not_called()
+    assert window.editor.toPlainText() == body
 
 
 def test_failed_save_keeps_tab_body_and_reopen_history_until_retry(
@@ -970,3 +1261,335 @@ def test_deletion_pending_files_show_retry_and_retry_again_after_restart(
     assert restored.store.pending_cleanup() == ()
     assert restored.cleanup_button.isHidden()
     assert not restored.retry_cleanup_action.isEnabled()
+
+
+@pytest.mark.parametrize("target_state", ["active", "background", "closed", "all_closed"])
+def test_history_pin_persists_without_opening_or_editing_note(qtbot, make_notebook, target_state):
+    window = make_notebook()
+    target = new_note(qtbot, window, "# 履歴からピン止め")
+    if target_state in {"background", "closed"}:
+        new_note(qtbot, window, "# 作業中のノート")
+    saved(qtbot, window)
+    if target_state in {"closed", "all_closed"}:
+        window.close_notes([target])
+        qtbot.waitUntil(lambda: not window._busy and target not in window._order)
+    original = window.store.get(target)
+    active, order = window._active, list(window._order)
+    history_count = window.store.closed_history_count()
+    window.show_history()
+
+    def target_card():
+        return next((card for _, card in window.sidebar._cards if card.note_id == target), None)
+
+    qtbot.waitUntil(lambda: target_card() is not None)
+    qtbot.mouseClick(
+        next(card for _, card in window.sidebar._cards if card.note_id == target).pin_button,
+        Qt.MouseButton.LeftButton,
+    )
+    qtbot.waitUntil(lambda: target_card() is not None and bool(target_card().result["pinned"]))
+    assert window.store.get(target).pinned
+    assert next(
+        card for _, card in window.sidebar._cards if card.note_id == target
+    ).pin_button.isChecked()
+    assert window._active == active
+    assert window._order == order
+    assert window.pin_action.isChecked() == (active == target)
+    if target in order:
+        assert window.tabs.tab_bar.tabText(order.index(target)) == original.title
+    window.sidebar.set_mode("pinned")
+    qtbot.waitUntil(lambda: [card.note_id for _, card in window.sidebar._cards] == [target])
+    qtbot.mouseClick(
+        next(card for _, card in window.sidebar._cards if card.note_id == target).pin_button,
+        Qt.MouseButton.LeftButton,
+    )
+    qtbot.waitUntil(lambda: not window.sidebar._cards)
+    result = window.store.get(target)
+    assert not result.pinned
+    assert (result.body, result.updated_at, result.created_at, result.revision) == (
+        original.body,
+        original.updated_at,
+        original.created_at,
+        original.revision,
+    )
+    assert window._active == active
+    assert window._order == order
+    assert not window.pin_action.isChecked()
+    assert window.store.closed_history_count() == history_count
+
+
+def test_history_pin_save_failure_keeps_state_and_allows_retry(qtbot, make_notebook, monkeypatch):
+    window = make_notebook()
+    target = new_note(qtbot, window, "# 保存失敗")
+    saved(qtbot, window)
+    window.show_history()
+    qtbot.waitUntil(lambda: bool(window.sidebar._cards))
+    original = window.store.set_pinned
+
+    def fail(*_args):
+        raise OSError("pin write failed")
+
+    monkeypatch.setattr(window.store, "set_pinned", fail)
+    qtbot.mouseClick(
+        next(card for _, card in window.sidebar._cards if card.note_id == target).pin_button,
+        Qt.MouseButton.LeftButton,
+    )
+    qtbot.waitUntil(lambda: "pin write failed" in window.statusBar().currentMessage())
+    assert not window.store.get(target).pinned
+    assert not window._summaries[target]["pinned"]
+    assert not window.sidebar._cards[0][1].result["pinned"]
+    assert not window.sidebar._cards[0][1].pin_button.isChecked()
+    monkeypatch.setattr(window.store, "set_pinned", original)
+    qtbot.mouseClick(
+        next(card for _, card in window.sidebar._cards if card.note_id == target).pin_button,
+        Qt.MouseButton.LeftButton,
+    )
+    qtbot.waitUntil(lambda: bool(window.sidebar._cards[0][1].result["pinned"]))
+    assert window.store.get(target).pinned
+    assert next(
+        card for _, card in window.sidebar._cards if card.note_id == target
+    ).pin_button.isChecked()
+
+
+@pytest.mark.parametrize("kind", ["file", "folder"])
+def test_insert_local_link_replaces_selection_saves_and_opens_without_copying(
+    qtbot, make_notebook, tmp_path, monkeypatch, kind
+):
+    from marknotes.local_links import LocalLinkDialog, local_path_link
+
+    path = tmp_path / "資料 [最終] #100%.txt"
+    if kind == "file":
+        path.write_text("original", encoding="utf-8")
+    else:
+        path.mkdir()
+    window = make_notebook()
+    note_id = new_note(qtbot, window, "表示名")
+    window.editor.selectAll()
+
+    def accept_dialog(dialog):
+        assert dialog.label_edit.text() == "表示名"
+        dialog.path_edit.setText(str(path))
+        dialog.accept()
+        return dialog.result()
+
+    monkeypatch.setattr(LocalLinkDialog, "exec", accept_dialog)
+    opened = []
+    monkeypatch.setattr(
+        "marknotes.preview.QDesktopServices.openUrl", lambda url: opened.append(url)
+    )
+    next(
+        action
+        for action in window.insert_menu.actions()
+        if action.text() == "ローカルパスへのリンク…"
+    ).trigger()
+    expected = local_path_link(str(path), "表示名")
+    assert window.editor.toPlainText() == expected
+    saved(qtbot, window)
+    assert window.store.get(note_id).body == expected
+    assert not list((window.base_dir / "assets").glob("*"))
+    qtbot.waitUntil(lambda: window._rendered_revision == window._revision)
+    qtbot.waitUntil(lambda: bool(javascript(qtbot, window, "document.querySelector('a')?.href")))
+    href = javascript(qtbot, window, "document.querySelector('a').href")
+    assert Path(QUrl(href).toLocalFile()) == path
+    window.preview.page().open_context_link(QUrl(href))
+    assert [Path(url.toLocalFile()) for url in opened] == [path]
+    window.editor.undo()
+    assert window.editor.toPlainText() == "表示名"
+    assert path.exists()
+
+
+def test_insert_timestamp_and_link_paste_require_an_active_note(qtbot, make_notebook):
+    window = make_notebook()
+    QApplication.clipboard().setText("custom+demo.v1://item/123")
+
+    def assert_commands_unavailable():
+        window.refresh_edit_actions()
+        window.refresh_clipboard_actions()
+        assert window.editor.isReadOnly()
+        assert not window.insert_timestamp_action.isEnabled()
+        assert not window.link_paste_action.isEnabled()
+        window.insert_timestamp()
+        window.paste_link()
+        assert window.editor.toPlainText() == ""
+        assert window._active is None
+
+    assert_commands_unavailable()
+    note_id = new_note(qtbot, window, "保存する本文")
+    window.refresh_edit_actions()
+    window.refresh_clipboard_actions()
+    assert window.insert_timestamp_action.isEnabled()
+    assert window.link_paste_action.isEnabled()
+    window.close_current()
+    qtbot.waitUntil(lambda: not window._busy and not window._order)
+    assert_commands_unavailable()
+    assert window.store.get(note_id).body == "保存する本文"
+
+
+def test_timestamp_and_custom_link_autosave_keep_undo_and_preview_across_tabs(
+    qtbot, make_notebook, monkeypatch
+):
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    fixed_time = datetime(2026, 9, 16, 14, 5, 6, tzinfo=UTC)
+    timestamp = fixed_time.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    monkeypatch.setattr("marknotes.interactions.datetime", SimpleNamespace(now=lambda: fixed_time))
+    window = make_notebook()
+    original = "# 操作を記録\n参照先\n"
+    first = new_note(qtbot, window, original)
+    document = window.editor.document()
+    window.editor.moveCursor(QTextCursor.MoveOperation.End)
+    window.refresh_edit_actions()
+    window.insert_timestamp_action.trigger()
+    timestamp_body = original + timestamp
+    assert window.editor.toPlainText() == timestamp_body
+    qtbot.waitUntil(lambda: not window._sessions[first].dirty, timeout=5000)
+    assert window.store.get(first).body == timestamp_body
+    window.editor.undo()
+    assert window.editor.toPlainText() == original
+    window.editor.redo()
+    assert window.editor.toPlainText() == timestamp_body
+
+    url = "custom+demo.v1://item/123?mode=open#part"
+    QApplication.clipboard().setText(url)
+    cursor = window.editor.textCursor()
+    start = timestamp_body.index("参照先")
+    cursor.setPosition(qt_position(timestamp_body, start))
+    cursor.setPosition(
+        qt_position(timestamp_body, start + len("参照先")), QTextCursor.MoveMode.KeepAnchor
+    )
+    window.editor.setTextCursor(cursor)
+    window.refresh_clipboard_actions()
+    assert window.link_paste_action.isEnabled()
+    window.link_paste_action.trigger()
+    linked_body = timestamp_body.replace("参照先", f"[参照先]({url})")
+    assert window.editor.toPlainText() == linked_body
+    qtbot.waitUntil(lambda: not window._sessions[first].dirty, timeout=5000)
+    assert window.store.get(first).body == linked_body
+
+    second_body = "# 別のノート\nこの本文は変えない"
+    second = new_note(qtbot, window, second_body)
+    activate(qtbot, window, first)
+    assert window.editor.document() is document
+    assert window.editor.toPlainText() == linked_body
+    window.editor.undo()
+    assert window.editor.toPlainText() == timestamp_body
+    window.editor.redo()
+    assert window.editor.toPlainText() == linked_body
+    saved(qtbot, window)
+    assert window.store.get(first).body == linked_body
+    assert window.store.get(second).body == second_body
+    qtbot.waitUntil(lambda: window._rendered_revision == window._revision, timeout=15000)
+    qtbot.waitUntil(
+        lambda: javascript(qtbot, window, "document.querySelector('#content a')?.href") == url,
+        timeout=10000,
+    )
+    assert javascript(qtbot, window, "document.querySelector('#content a').textContent") == "参照先"
+    preview_text = javascript(qtbot, window, "document.getElementById('content').textContent")
+    assert timestamp in preview_text
+    activate(qtbot, window, second)
+    assert window.editor.toPlainText() == second_body
+
+
+def test_preview_task_click_autosaves_and_keeps_selection_and_undo_across_tabs(
+    qtbot, make_notebook
+):
+    import json
+
+    from PySide6.QtCore import QPoint
+
+    window = make_notebook()
+    original = "# 😀作業の記録\n- [ ] 確認する\n- [x] 完了した項目"
+    first = new_note(qtbot, window, original)
+    saved(qtbot, window)
+    document = window.editor.document()
+    cursor = window.editor.textCursor()
+    cursor.setPosition(qt_position(original, 2))
+    cursor.setPosition(qt_position(original, 5), QTextCursor.MoveMode.KeepAnchor)
+    window.editor.setTextCursor(cursor)
+    selection = (cursor.anchor(), cursor.position(), cursor.selectedText())
+    qtbot.waitUntil(lambda: window._rendered_revision == window._revision, timeout=15000)
+    qtbot.waitUntil(
+        lambda: (
+            javascript(qtbot, window, "window.previewApi?.metrics().revision") == window._revision
+        ),
+        timeout=10000,
+    )
+    window.preview.scroll_to_source(0, window._revision)
+    qtbot.waitUntil(
+        lambda: javascript(qtbot, window, "window.previewApi.metrics().scrollY") == 0,
+        timeout=5000,
+    )
+    point = json.loads(
+        javascript(
+            qtbot,
+            window,
+            "JSON.stringify((() => {const checkbox=document.querySelector("
+            + "'#content input[type=checkbox][data-task-line]');"
+            + "const r=checkbox.getBoundingClientRect();"
+            + "return [Math.round(r.left+r.width/2),Math.round(r.top+r.height/2)];})())",
+        )
+    )
+    target = window.preview.view.focusProxy()
+    assert target is not None
+    qtbot.mouseClick(target, Qt.MouseButton.LeftButton, pos=QPoint(*point))
+    checked = original.replace("- [ ]", "- [x]", 1)
+    qtbot.waitUntil(lambda: window.editor.toPlainText() == checked, timeout=5000)
+    cursor = window.editor.textCursor()
+    assert (cursor.anchor(), cursor.position(), cursor.selectedText()) == selection
+    qtbot.waitUntil(lambda: not window._sessions[first].dirty, timeout=5000)
+    assert window.store.get(first).body == checked
+    window.editor.undo()
+    assert window.editor.toPlainText() == original
+    window.editor.redo()
+    assert window.editor.toPlainText() == checked
+
+    second_body = "# 別のノート\n- [ ] こちらは変更しない"
+    second = new_note(qtbot, window, second_body)
+    activate(qtbot, window, first)
+    assert window.editor.document() is document
+    window.editor.undo()
+    assert window.editor.toPlainText() == original
+    window.editor.redo()
+    assert window.editor.toPlainText() == checked
+    saved(qtbot, window)
+    assert window.store.get(first).body == checked
+    assert window.store.get(second).body == second_body
+
+
+def test_preview_task_rejects_previous_tab_and_closed_note_revisions(qtbot, make_notebook):
+    window = make_notebook()
+    original = "- [ ] 同じタスク"
+    first = new_note(qtbot, window, original)
+    qtbot.waitUntil(lambda: window._rendered_revision == window._revision, timeout=15000)
+    first_revision = window._rendered_revision
+    second = new_note(qtbot, window, original)
+    qtbot.waitUntil(lambda: window._rendered_revision == window._revision, timeout=15000)
+    second_revision = window._rendered_revision
+    assert second_revision != first_revision
+    assert not window._toggle_preview_task(0, 3, True, first_revision)
+    assert window.editor.toPlainText() == original
+    assert window._sessions[first].document.toPlainText() == original
+
+    assert window._toggle_preview_task(0, 3, True, second_revision)
+    checked = "- [x] 同じタスク"
+    assert window.editor.toPlainText() == checked
+    saved(qtbot, window)
+    assert window.store.get(first).body == original
+    assert window.store.get(second).body == checked
+    qtbot.waitUntil(lambda: window._rendered_revision == window._revision, timeout=15000)
+    closed_revision = window._rendered_revision
+    window.close_current()
+    qtbot.waitUntil(lambda: not window._busy and window._active == first)
+    assert not window._toggle_preview_task(0, 3, False, closed_revision)
+    assert window.editor.toPlainText() == original
+    assert window.store.get(second).body == checked
+
+    window.close_current()
+    qtbot.waitUntil(lambda: not window._busy and not window._order)
+    assert window._active is None
+    assert window.editor.isReadOnly()
+    assert not window._toggle_preview_task(0, 3, True, first_revision)
+    assert not window._toggle_preview_task(0, 3, True, window._revision)
+    assert window.editor.toPlainText() == ""
+    assert window.store.get(first).body == original
+    assert window.store.get(second).body == checked

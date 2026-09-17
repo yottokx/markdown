@@ -14,6 +14,7 @@ from PySide6.QtGui import QColor, QDesktopServices, QPageLayout
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineScript, QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
+from .link_schemes import is_external_link
 from .preview import PreviewPane
 from .rendering import render_markdown
 
@@ -104,7 +105,8 @@ class ExportPage(QWebEnginePage):
             return True
         if (
             navigation_type == QWebEnginePage.NavigationType.NavigationTypeLinkClicked
-            and url.scheme().lower() in {"http", "https", "mailto"}
+            and url.isValid()
+            and is_external_link(url.toString())
         ):
             QDesktopServices.openUrl(url)
         return False

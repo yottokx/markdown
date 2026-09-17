@@ -9,8 +9,9 @@ from pathlib import Path
 from bs4 import BeautifulSoup
 from markdown_it import MarkdownIt
 from markdownify import markdownify
-from PySide6.QtCore import QMimeData
+from PySide6.QtCore import QMimeData, QUrl
 
+from marknotes.link_schemes import is_safe_link
 from marknotes.math_parser import math_plugin
 
 IMAGE_SUFFIXES = frozenset(
@@ -24,6 +25,43 @@ class PasteDecision:
     text: str = ""
     files: list[Path] = field(default_factory=list)
     reason: str = ""
+
+
+def clipboard_url(mime: QMimeData | None) -> str | None:
+    """Return one absolute URL, preserving custom schemes and encoded characters."""
+    if mime is None:
+        return None
+    if mime.hasText():
+        value = mime.text().strip()
+    elif mime.hasUrls() and len(mime.urls()) == 1:
+        value = mime.urls()[0].toString(QUrl.ComponentFormattingOption.FullyEncoded)
+    else:
+        return None
+    if not value or any(char.isspace() or ord(char) < 32 for char in value):
+        return None
+    if not re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", value):
+        return None
+    # A Windows drive path is not an explicit URL.
+    if re.match(r"^[A-Za-z]:[\\/]", value):
+        return None
+    url = QUrl(value)
+    if not url.isValid() or not value.split(":", 1)[1] or not is_safe_link(value):
+        return None
+    if url.scheme().lower() in {"http", "https", "ftp", "ftps"} and not url.host():
+        return None
+    return value
+
+
+def as_link(url: str, label: str = "") -> str:
+    """Escape a literal label and URL without changing encoded URL delimiters."""
+    text = " ".join((label or url).splitlines())
+    text = re.sub(r"([\\`*_{}\[\]<>()!|&$])", r"\\\1", text)
+    destination = (
+        url.replace("\\", "%5C").replace("<", "%3C").replace(">", "%3E").replace("&", "&amp;")
+    )
+    if "(" in destination or ")" in destination:
+        destination = f"<{destination}>"
+    return f"[{text}]({destination})"
 
 
 def _fragment(html: str) -> BeautifulSoup:

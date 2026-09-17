@@ -1,4 +1,4 @@
-"""Application icons and the stable Windows taskbar identity."""
+"""Application icons and the Windows taskbar identity."""
 
 from __future__ import annotations
 
@@ -8,12 +8,15 @@ from pathlib import Path
 
 from PySide6.QtGui import QIcon
 
+from .application_profile import STABLE_PROFILE
+
 RESOURCE_DIR = Path(__file__).resolve().parent / "resources"
-WINDOWS_APP_USER_MODEL_ID = "Yotto.MarkNotes"
 _windows_identity_set = False
 
 
-def set_windows_app_user_model_id() -> None:
+def set_windows_app_user_model_id(
+    app_user_model_id: str = STABLE_PROFILE.windows_app_user_model_id,
+) -> None:
     """Set before native windows exist so Python launches use their own taskbar group."""
     global _windows_identity_set
     if sys.platform != "win32" or _windows_identity_set:
@@ -24,7 +27,7 @@ def set_windows_app_user_model_id() -> None:
         setter = ctypes.WinDLL("shell32").SetCurrentProcessExplicitAppUserModelID
         setter.argtypes = [ctypes.c_wchar_p]
         setter.restype = ctypes.c_long
-        result = setter(WINDOWS_APP_USER_MODEL_ID)
+        result = setter(app_user_model_id)
         if result < 0:
             logging.getLogger(__name__).warning("Windows AppUserModelID failed: %#x", result)
             return

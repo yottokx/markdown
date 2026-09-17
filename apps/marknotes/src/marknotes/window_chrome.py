@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .application_profile import DEVELOPMENT_PROFILE
 from .ui_icons import outline_icon
 
 
@@ -72,6 +73,16 @@ class TitleBar(QWidget):
         controls = QHBoxLayout(self.controls)
         controls.setContentsMargins(0, 0, 0, 0)
         controls.setSpacing(0)
+        self.dev_badge = QLabel("dev", self.controls)
+        self.dev_badge.setObjectName("developmentBadge")
+        self.dev_badge.setFixedSize(48, 22)
+        self.dev_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.dev_badge.setAccessibleName("開発版")
+        self.dev_badge.setToolTip("MarkNotes 開発版")
+        self.dev_badge.setVisible(
+            QApplication.applicationName() == DEVELOPMENT_PROFILE.application_name
+        )
+        controls.addWidget(self.dev_badge, 0, Qt.AlignmentFlag.AlignVCenter)
         self.minimize_button = self._control("最小化", window.showMinimized)
         self.maximize_button = self._control("最大化", self.toggle_maximized)
         self.close_button = self._control("閉じる", window.close)
@@ -165,10 +176,15 @@ class TitleBar(QWidget):
         hover = "#384454" if dark else "#e0e7f0"
         pressed = "#46556a" if dark else "#cbd7e7"
         disabled = "#7e8998" if dark else "#9299a3"
+        badge_text = "#f0cb7c" if dark else "#805b13"
+        badge_background = "#493a20" if dark else "#fff1cc"
         self.setStyleSheet(
             f"#applicationTitleBar {{ background: {background}; color: {foreground}; }}"
             f"#applicationTitleBar QLabel {{ color: {foreground}; background: transparent;"
             " font-size: 10pt; font-weight: 300; }"
+            "#applicationTitleBar QLabel#developmentBadge {"
+            f" color: {badge_text}; background: {badge_background};"
+            " font-size: 9pt; font-weight: 600; border-radius: 4px; margin-right: 8px; }"
             f"#applicationTitleBar QToolButton {{ color: {foreground}; border: 0;"
             " background: transparent; padding: 0; border-radius: 5px; }"
             "#applicationTitleBar QToolButton#windowControlButton,"

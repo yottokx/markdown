@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QFileSystemWatcher, QSettings, Qt, QTimer
-from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QKeySequence, QShortcut
+from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QKeySequence, QShortcut, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
     QLabel,
@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from marknotes.application_icon import application_icon, set_windows_app_user_model_id
+from marknotes.application_profile import application_profile
 from marknotes.display_modes import DisplayModes
 from marknotes.document import DocumentSession
 from marknotes.export_dialog import ExportActions
@@ -27,7 +28,8 @@ from marknotes.localization import install_japanese_translation
 from marknotes.menu_theme import apply_window_menu_theme
 from marknotes.preview import PreviewPane
 from marknotes.rendering import render_markdown
-from marknotes.search import SearchBar
+from marknotes.search import SearchBar, qt_position
+from marknotes.task_lists import task_marker_column
 from marknotes.theme import palette
 from marknotes.ui_icons import outline_icon
 from marknotes.window_chrome import ChromeMainWindow
@@ -61,11 +63,13 @@ class MainWindow(DisplayModes, FileActions, EditingActions, ExportActions, Chrom
         self._file_watcher.directoryChanged.connect(self._external_file_changed)
         self._revision = 0
         self._rendered_revision = -1
+        self._preview_task_markers: set[tuple[int, int]] = set()
         self._syncing_editor = False
         self._ignore_editor_position: float | None = None
         self._loading = False
         self.editor = InteractiveEditor(self)
         self.preview = PreviewPane()
+        self.preview.set_task_toggle_handler(self._toggle_preview_task)
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.setChildrenCollapsible(False)
         self.editor.setMinimumWidth(180)
@@ -216,6 +220,11 @@ class MainWindow(DisplayModes, FileActions, EditingActions, ExportActions, Chrom
             "Markdownとして貼り付け",
             lambda: self._with_source_visible(self.paste_html),
         )
+        self.link_paste_action = action(
+            self.paste_format_menu,
+            "リンクとして貼り付け",
+            lambda: self._with_source_visible(self.paste_link),
+        )
         self.code_paste_action = action(
             self.paste_format_menu,
             "コードブロックとして貼り付け",
@@ -247,6 +256,11 @@ class MainWindow(DisplayModes, FileActions, EditingActions, ExportActions, Chrom
         action(edit_menu, "前を検索", lambda: self.navigate_search(True), "Shift+F3")
         action(
             insert_menu, "画像ファイル…", lambda: self._with_source_visible(self.insert_image_file)
+        )
+        self.insert_timestamp_action = action(
+            insert_menu,
+            "タイムスタンプ",
+            lambda: self._with_source_visible(self.insert_timestamp),
         )
         self.create_table_action = action(
             insert_menu, "表…", lambda: self._with_source_visible(self.create_table)
@@ -379,7 +393,53 @@ class MainWindow(DisplayModes, FileActions, EditingActions, ExportActions, Chrom
         rendered = render_markdown(
             self.image_preview_source(self.session.normalize_references(source))
         )
+        self._preview_task_markers = set(rendered.task_markers)
         self.preview.set_document(rendered.html, rendered.line_count, self.base_dir, self._revision)
+
+    def _toggle_preview_task(self, line: int, column: int, checked: bool, revision: int) -> bool:
+        if (
+            self._loading
+            or self.editor.isReadOnly()
+            or revision != self._revision
+            or (line, column) not in self._preview_task_markers
+        ):
+            return False
+        document = self.editor.document()
+        block = document.findBlockByNumber(line)
+        if not block.isValid() or task_marker_column(block.text()) != column:
+            return False
+        replacement = "x" if checked else " "
+        if block.text()[column].lower() == replacement:
+            return True
+
+        # Change only the task marker, keeping the editor's caret, selection,
+        # focus and viewport independent of the clicked preview checkbox.
+        selection = self.editor.textCursor()
+        anchor, position = selection.anchor(), selection.position()
+        source_position = self.editor.source_position()
+        preview_position = self._preview_position
+        syncing = self._syncing_editor
+        self._syncing_editor = True
+        try:
+            cursor = QTextCursor(document)
+            offset = block.position() + qt_position(block.text(), column)
+            cursor.setPosition(offset)
+            cursor.setPosition(offset + 1, QTextCursor.MoveMode.KeepAnchor)
+            cursor.beginEditBlock()
+            cursor.insertText(replacement)
+            cursor.endEditBlock()
+            selection.setPosition(anchor)
+            selection.setPosition(position, QTextCursor.MoveMode.KeepAnchor)
+            self.editor.setTextCursor(selection)
+            self.editor.scroll_to_source(source_position)
+        finally:
+            self._syncing_editor = syncing
+        self._preview_position = preview_position
+        # Send the updated revision immediately so a following click does not
+        # wait for the ordinary typing debounce to receive the current source.
+        self._render_timer.stop()
+        self._render()
+        return True
 
     def _preview_ready(self, revision: int) -> None:
         if revision != self._revision:
@@ -462,24 +522,35 @@ class MainWindow(DisplayModes, FileActions, EditingActions, ExportActions, Chrom
         )
 
 
+def _parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="MarkNotes: 自動保存のMarkdownノート")
+    parser.add_argument("files", nargs="*", type=Path, help="ノートに取り込むMarkdownファイル")
+    parser.add_argument("--library", type=Path, help="ライブラリの保存フォルダ")
+    parser.add_argument(
+        "--dev",
+        action="store_true",
+        help="通常版から分離した開発用の設定とライブラリを使用する",
+    )
+    parser.add_argument("--sample", action="store_true", help="検証サンプルをノートに取り込む")
+    parser.add_argument("--smoke-report", type=Path, help=argparse.SUPPRESS)
+    return parser.parse_args(argv)
+
+
 def main(argv: list[str] | None = None) -> int:
     from PySide6.QtWidgets import QMessageBox
 
     from .notebook import NotebookWindow, default_library_root
     from .notebook_instance import NotebookInstance
 
-    parser = argparse.ArgumentParser(description="MarkNotes: 自動保存のMarkdownノート")
-    parser.add_argument("files", nargs="*", type=Path, help="ノートに取り込むMarkdownファイル")
-    parser.add_argument("--library", type=Path, help="ライブラリの保存フォルダ")
-    parser.add_argument("--sample", action="store_true", help="検証サンプルをノートに取り込む")
-    parser.add_argument("--smoke-report", type=Path, help=argparse.SUPPRESS)
-    args = parser.parse_args(argv)
-    set_windows_app_user_model_id()
+    args = _parse_arguments(argv)
+    profile = application_profile(args.dev)
+    set_windows_app_user_model_id(profile.windows_app_user_model_id)
     app = QApplication.instance() or QApplication([sys.argv[0]])
     app.setWindowIcon(application_icon())
-    app.setApplicationName("MarkNotes")
+    app.setApplicationName(profile.application_name)
+    app.setApplicationDisplayName(profile.display_name)
     app.setOrganizationName("MarkNotes")
-    settings = QSettings("MarkNotes", "MarkNotes")
+    settings = QSettings("MarkNotes", profile.application_name)
     root = args.library or Path(str(settings.value("library/path", str(default_library_root()))))
     paths = list(args.files)
     if args.sample:

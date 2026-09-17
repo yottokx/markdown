@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtGui import QImage, QTextCursor
@@ -9,8 +10,10 @@ from PySide6.QtWidgets import QApplication, QDialog, QFileDialog, QMenu, QMessag
 
 from marknotes.clipboard import (
     as_code_block,
+    as_link,
     as_quote,
     choose_paste,
+    clipboard_url,
     existing_fence_paste,
     html_to_markdown,
 )
@@ -91,6 +94,7 @@ class EditingActions(ImageActions):
         preview_only = getattr(self, "display_mode", "split") == "preview"
         copy_available = bool(self.preview.page().selectedText()) if preview_only else selected
         self.insert_menu.setEnabled(editable)
+        self.insert_timestamp_action.setEnabled(editable)
         self.cut_action.setEnabled(selected and editable and not preview_only)
         self.copy_action.setEnabled(copy_available)
         self.delete_action.setEnabled(selected and editable and not preview_only)
@@ -102,11 +106,13 @@ class EditingActions(ImageActions):
         has_text = mime is not None and mime.hasText()
         # Derive availability from the payload: child actions report disabled
         # while their QMenu is disabled, even after setEnabled(True).
+        url = clipboard_url(mime)
         self.paste_format_menu.setEnabled(
-            editable and mime is not None and (has_text or mime.hasHtml())
+            editable and mime is not None and (has_text or mime.hasHtml() or url is not None)
         )
         self.paste_action.setEnabled(editable and self.editor.canPaste())
         self.plain_paste_action.setEnabled(editable and has_text)
+        self.link_paste_action.setEnabled(editable and url is not None)
         self.html_paste_action.setEnabled(
             editable and mime is not None and (mime.hasHtml() or has_text)
         )
@@ -149,6 +155,22 @@ class EditingActions(ImageActions):
             self.statusBar().showMessage(decision.reason or "貼り付けました", 3500)
         except (ValueError, OSError, TypeError) as exc:
             QMessageBox.warning(self, "貼り付けできません", str(exc))
+
+    def insert_timestamp(self):
+        if self.editor.isReadOnly():
+            return
+        self.insert_text(datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S"))
+
+    def paste_link(self):
+        if self.editor.isReadOnly():
+            return
+        url = clipboard_url(QApplication.clipboard().mimeData())
+        if url is None:
+            self.statusBar().showMessage("クリップボードに単一のURLがありません", 3500)
+            return
+        label = self.editor.textCursor().selectedText().replace("\u2029", "\n")
+        self.insert_text(as_link(url, label))
+        self.statusBar().showMessage("リンクとして貼り付けました", 3500)
 
     def paste_plain(self):
         self.insert_text(QApplication.clipboard().text())

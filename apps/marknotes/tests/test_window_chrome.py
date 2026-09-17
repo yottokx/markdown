@@ -5,6 +5,8 @@ from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
 from PySide6.QtGui import QAction, QMouseEvent, QPalette
 from PySide6.QtWidgets import QApplication, QPlainTextEdit, QToolButton, QWidget
 
+from marknotes.app import _parse_arguments
+from marknotes.application_profile import application_profile
 from marknotes.ui_icons import outline_icon
 from marknotes.window_chrome import ChromeMainWindow
 
@@ -222,3 +224,40 @@ def test_chrome_text_buttons_follow_theme_without_a_global_palette_change(window
             button.ensurePolished()
             assert button.palette().color(QPalette.ColorRole.ButtonText).name() == foreground
         assert window.menuBar().palette().color(QPalette.ColorRole.WindowText).name() == foreground
+
+
+@pytest.mark.parametrize("argv", [[], ["--dev"]])
+def test_dev_badge_uses_launch_profile_and_fits_before_window_buttons(qtbot, qapp, argv):
+    args = _parse_arguments(argv)
+    profile = application_profile(args.dev)
+    previous_name = qapp.applicationName()
+    try:
+        qapp.setApplicationName(profile.application_name)
+        window = ChromeMainWindow()
+    finally:
+        qapp.setApplicationName(previous_name)
+    qtbot.addWidget(window)
+    window.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+    bar = window.title_bar
+    tabs = QWidget()
+    bar.set_center_widget(tabs)
+    window.show()
+    for width, dark in [(800, False), (540, True)]:
+        window.resize(width, 500)
+        window.apply_chrome_theme(dark)
+        bar.layout().activate()
+        bar.controls.layout().activate()
+        assert bar.dev_badge.isVisible() is args.dev
+        assert bar.drag_region.width() == 112
+        assert tabs.geometry().right() < bar.drag_region.x()
+        assert bar.drag_region.geometry().right() < bar.controls.x()
+        if args.dev:
+            badge = bar.dev_badge
+            badge.ensurePolished()
+            assert badge.text() == "dev"
+            assert badge.accessibleName() == "開発版"
+            assert badge.geometry().right() < bar.minimize_button.x()
+            assert bar.controls.rect().contains(badge.geometry())
+            assert badge.palette().color(QPalette.ColorRole.WindowText).name() == (
+                "#f0cb7c" if dark else "#805b13"
+            )

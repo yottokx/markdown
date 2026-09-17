@@ -21,6 +21,7 @@ from PySide6.QtCore import QBuffer, QByteArray, QIODevice
 from PySide6.QtGui import QImageReader
 
 from md_editor.image_sources import parse_srcset
+from md_editor.link_schemes import is_safe_link
 
 RESOURCE_DIR = Path(__file__).resolve().parent / "resources"
 MAX_RESOURCE_BYTES = 20 * 1024 * 1024
@@ -85,10 +86,9 @@ def _style_text(css: str) -> str:
 
 
 def _safe_navigation(url: str) -> bool:
-    compact = re.sub(r"[\x00-\x20]", "", url)
     # Navigation targets are preserved links, not resources to embed. The Qt
     # snapshot resolves local Markdown links to file URIs before reaching us.
-    return urllib.parse.urlsplit(compact).scheme.lower() in {"", "http", "https", "mailto", "file"}
+    return is_safe_link(url)
 
 
 class _Exporter:
@@ -517,7 +517,7 @@ class _Exporter:
             for attribute, value in list(tag.attrs.items()):
                 attribute = attribute.lower()
                 if (
-                    attribute.startswith(("on", "data-source-"))
+                    attribute.startswith(("on", "data-source-", "data-task-"))
                     or attribute in {"data-code-source", "data-preview-code-ui"}
                     or attribute in _ACTIVE_ATTRIBUTES
                 ):

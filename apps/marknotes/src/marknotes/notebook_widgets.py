@@ -346,7 +346,7 @@ class NotebookTabs(QWidget):
                 note = self._notes[note_id]
                 title = str(note.get("title") or "新しいノート")
                 self._close_buttons[note_id].setAccessibleName(f"{title} のタブを閉じる")
-                self.tab_bar.setTabText(index, ("● " if note.get("pinned") else "") + title)
+                self.tab_bar.setTabText(index, title)
                 date, clock = _local_date(note.get("content_updated_at", note.get("last_active")))
                 self.tab_bar.setTabToolTip(index, f"{title}\n{date} {clock}".strip())
             if self._active not in ids:
@@ -475,7 +475,7 @@ class NotebookTabs(QWidget):
         for note_id in self.hidden_note_ids:
             note = self._notes[note_id]
             title = str(note.get("title") or "新しいノート").replace("&", "&&")
-            action = menu.addAction(("● " if note.get("pinned") else "") + title)
+            action = menu.addAction(title)
             action.triggered.connect(
                 lambda _checked=False, value=note_id: self.activated.emit(value)
             )
@@ -493,6 +493,7 @@ class NotebookTabs(QWidget):
 
 class _ResultCard(QFrame):
     activated = Signal(str, object)
+    pin_requested = Signal(str, bool)
     more_requested = Signal(str)
     context_requested = Signal(str, QPoint)
 
@@ -510,10 +511,16 @@ class _ResultCard(QFrame):
             self.match_start = int(first.get("start", 0)) + (int(matches[0][0]) if matches else 0)
         self.setObjectName("notebookResultCard")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 9, 10, 9)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 10, 0)
+        row.setSpacing(6)
+        self.content = QFrame(self)
+        self.content.setObjectName("notebookResultContent")
+        layout = QVBoxLayout(self.content)
+        layout.setContentsMargins(10, 9, 4, 9)
         layout.setSpacing(6)
-        self.label = QLabel(self)
+        row.addWidget(self.content, 1)
+        self.label = QLabel(self.content)
         self.label.setObjectName("notebookResultText")
         self.label.setWordWrap(True)
         self.label.setTextFormat(Qt.TextFormat.RichText)
@@ -522,8 +529,22 @@ class _ResultCard(QFrame):
         self.label.linkActivated.connect(self._link_activated)
         title = str(result.get("title") or "新しいノート")
         self.label.setAccessibleName(title)
+        self.label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         layout.addWidget(self.label)
-        self.excerpt_label = QLabel(self)
+        self.pin_button = QToolButton(self)
+        self.pin_button.setObjectName("notebookResultPin")
+        self.pin_button.setFixedSize(28, 28)
+        self.pin_button.setIconSize(QSize(18, 18))
+        self.pin_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self.pin_button.setAutoRaise(True)
+        self.pin_button.setCheckable(True)
+        self.pin_button.clicked.connect(self._request_pin)
+        pin_column = QVBoxLayout()
+        pin_column.setContentsMargins(0, 9, 0, 0)
+        pin_column.addWidget(self.pin_button, 0, Qt.AlignmentFlag.AlignTop)
+        pin_column.addStretch(1)
+        row.addLayout(pin_column)
+        self.excerpt_label = QLabel(self.content)
         self.excerpt_label.setObjectName("notebookResultExcerpt")
         self.excerpt_label.setTextFormat(Qt.TextFormat.PlainText)
         self.excerpt_label.setWordWrap(False)
@@ -532,7 +553,7 @@ class _ResultCard(QFrame):
         )
         self.excerpt_label.setVisible(bool(self._excerpt))
         layout.addWidget(self.excerpt_label)
-        self.more_button = QPushButton(self)
+        self.more_button = QPushButton(self.content)
         self.more_button.setObjectName("notebookResultMore")
         covered = sum(len(snippet.get("matches", [])) for snippet in snippets)
         remaining = max(0, int(result.get("total_matches", 0)) - covered)
@@ -542,7 +563,7 @@ class _ResultCard(QFrame):
         self.more_button.clicked.connect(self._request_more)
         layout.addWidget(self.more_button)
         self.setAccessibleName(title)
-        for widget in (self, self.label, self.excerpt_label, self.more_button):
+        for widget in (self, self.content, self.label, self.excerpt_label, self.more_button):
             widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
             widget.customContextMenuRequested.connect(
                 lambda point, target=widget: self.context_requested.emit(
@@ -554,16 +575,22 @@ class _ResultCard(QFrame):
     def apply_theme(self, dark: bool) -> None:
         c = _navigation_colors(dark)
         self.setStyleSheet(f"""
-            QFrame#notebookResultCard {{
+            QFrame#notebookResultCard, QFrame#notebookResultContent {{
                 background: transparent; border: none; border-radius: 6px;
             }}
-            QFrame#notebookResultCard:hover {{ background: {c["hover"]}; }}
+            QFrame#notebookResultContent:hover {{ background: {c["hover"]}; }}
             QLabel#notebookResultText {{
                 background: transparent; color: {c["text"]}; border: none;
             }}
             QLabel#notebookResultExcerpt {{
                 background: transparent; color: {c["muted"]}; border: none;
             }}
+            QToolButton#notebookResultPin {{
+                background: transparent; border: 1px solid transparent; border-radius: 4px;
+            }}
+            QToolButton#notebookResultPin:checked {{ background: {c["selected"]}; }}
+            QToolButton#notebookResultPin:hover {{ background: {c["hover"]}; }}
+            QToolButton#notebookResultPin:focus {{ border-color: {c["accent"]}; }}
             QPushButton#notebookResultMore {{
                 background: transparent; color: {c["accent"]}; border: none;
                 border-radius: 4px; padding: 3px 6px; text-align: left;
@@ -575,8 +602,12 @@ class _ResultCard(QFrame):
         title_html = highlighted_text(
             str(result.get("title") or "新しいノート"), result.get("title_matches", [])
         )
-        if result.get("pinned"):
-            title_html = "● " + title_html
+        pinned = bool(result.get("pinned"))
+        self.pin_button.setChecked(pinned)
+        self.pin_button.setIcon(outline_icon("pin", c["accent"] if pinned else c["muted"]))
+        pin_hint = "ピン止めを解除" if pinned else "ノートをピン止め"
+        self.pin_button.setToolTip(pin_hint)
+        self.pin_button.setAccessibleName(f"{pin_hint}: {result.get('title') or '新しいノート'}")
         _, clock = _local_date(result.get("content_updated_at", result.get("created_at")))
         count = int(result.get("total_matches", 0))
         metadata = " · ".join(part for part in (clock, f"{count} 件一致" if count else "") if part)
@@ -625,6 +656,12 @@ class _ResultCard(QFrame):
         text_layout.endLayout()
         self.excerpt_label.setText("\n".join(rendered))
 
+    def _request_pin(self) -> None:
+        # Keep the displayed state in sync with successful persistence, including failures.
+        pinned = bool(self.result.get("pinned"))
+        self.pin_button.setChecked(pinned)
+        self.pin_requested.emit(self.note_id, not pinned)
+
     def _request_more(self) -> None:
         self.more_button.setEnabled(False)
         self.more_requested.emit(self.note_id)
@@ -652,6 +689,7 @@ class NotebookSidebar(QWidget):
 
     note_requested = Signal(str, object)
     delete_requested = Signal(str)
+    note_pin_requested = Signal(str, bool)
     query_changed = Signal(str)
     mode_changed = Signal(str)
     date_order_changed = Signal(str)
@@ -918,6 +956,7 @@ class NotebookSidebar(QWidget):
             )
             card = _ResultCard(result, self.results, dark=self._dark)
             card.activated.connect(self.note_requested)
+            card.pin_requested.connect(self._request_pin)
             card.more_requested.connect(self.more_matches_requested)
             card.context_requested.connect(self._show_note_context)
             self.results.setItemWidget(item, card)
@@ -949,6 +988,7 @@ class NotebookSidebar(QWidget):
             result = {**card.result, "snippets": list(snippets), "total_matches": total_matches}
             replacement = _ResultCard(result, self.results, dark=self._dark)
             replacement.activated.connect(self.note_requested)
+            replacement.pin_requested.connect(self._request_pin)
             replacement.more_requested.connect(self.more_matches_requested)
             replacement.context_requested.connect(self._show_note_context)
             self.results.setItemWidget(item, replacement)
@@ -968,10 +1008,19 @@ class NotebookSidebar(QWidget):
 
     def build_context_menu(self, note_id: str | None = None) -> QMenu:
         menu = QMenu(self)
-        if any(card.note_id == note_id for _item, card in self._cards):
+        card = next((card for _item, card in self._cards if card.note_id == note_id), None)
+        if card is not None:
+            pinned = bool(card.result.get("pinned"))
+            pin_action = menu.addAction("ピン止めを解除" if pinned else "ノートをピン止め")
+            pin_action.triggered.connect(lambda: self._request_pin(note_id, not pinned))
+            menu.addSeparator()
             action = menu.addAction("ノートを削除…")
             action.triggered.connect(lambda: self._request_delete(note_id))
         return menu
+
+    def _request_pin(self, note_id: str, pinned: bool) -> None:
+        if any(card.note_id == note_id for _item, card in self._cards):
+            self.note_pin_requested.emit(note_id, pinned)
 
     def _request_delete(self, note_id: str) -> None:
         if any(card.note_id == note_id for _item, card in self._cards):
@@ -1003,13 +1052,31 @@ class NotebookSidebar(QWidget):
         width = max(100, self.results.viewport().width() - 8)
         for item, card in self._cards:
             card.setFixedWidth(width)
-            inner_width = max(50, width - 20)
-            height = max(48, card.label.heightForWidth(inner_width) + 18)
+            row = card.layout()
+            content_layout = card.content.layout()
+            outer = row.contentsMargins()
+            inner = content_layout.contentsMargins()
+            label_width = max(
+                1,
+                width
+                - outer.left()
+                - outer.right()
+                - card.pin_button.width()
+                - row.spacing()
+                - inner.left()
+                - inner.right(),
+            )
+            height = max(
+                48,
+                max(card.label.heightForWidth(label_width), card.pin_button.height())
+                + inner.top()
+                + inner.bottom(),
+            )
             if not card.excerpt_label.isHidden():
-                card.fit_excerpt(inner_width)
-                height += card.excerpt_label.sizeHint().height() + card.layout().spacing()
+                card.fit_excerpt(label_width)
+                height += card.excerpt_label.sizeHint().height() + content_layout.spacing()
             if not card.more_button.isHidden():
-                height += card.more_button.sizeHint().height() + card.layout().spacing()
+                height += card.more_button.sizeHint().height() + content_layout.spacing()
             item.setSizeHint(QSize(width, height))
 
     def eventFilter(self, watched, event) -> bool:

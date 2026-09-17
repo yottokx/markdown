@@ -8,6 +8,7 @@
   const state = {
     revision: -1,
     lineCount: 1,
+    tasksEditable: false,
     maxSource: 0,
     anchors: [{ source: 0, y: 0 }],
     source: 0,
@@ -231,6 +232,52 @@
     }
   }
 
+  const taskSelector = 'input[type="checkbox"][data-task-line][data-task-column]';
+
+  function setTasksEditable(editable) {
+    state.tasksEditable = Boolean(editable);
+    for (const checkbox of content.querySelectorAll(taskSelector)) {
+      checkbox.disabled = !state.tasksEditable;
+    }
+  }
+
+  function installTaskCheckboxes(editable) {
+    const revision = state.revision;
+    setTasksEditable(editable);
+    for (const checkbox of content.querySelectorAll(taskSelector)) {
+      const line = Number(checkbox.dataset.taskLine);
+      const column = Number(checkbox.dataset.taskColumn);
+      let committed = checkbox.checked;
+      let pending = false;
+      // Listen only on the checkbox. In particular, do not make the item text
+      // a label or a row-wide click target.
+      checkbox.addEventListener("click", event => {
+        const rect = checkbox.getBoundingClientRect();
+        const outside = event.detail > 0 && (event.clientX < rect.left
+          || event.clientX >= rect.right || event.clientY < rect.top || event.clientY >= rect.bottom);
+        if (pending || outside || !checkbox.isConnected || revision !== state.revision
+            || !state.tasksEditable || !state.bridge) event.preventDefault();
+      });
+      checkbox.addEventListener("change", () => {
+        if (pending || !checkbox.isConnected || revision !== state.revision
+            || !state.tasksEditable || !state.bridge
+            || !Number.isInteger(line) || line < 0 || line >= state.lineCount
+            || !Number.isInteger(column) || column < 0) {
+          checkbox.checked = committed;
+          return;
+        }
+        const checked = checkbox.checked;
+        pending = true;
+        state.bridge.toggleTask(line, column, checked, revision, accepted => {
+          pending = false;
+          if (!checkbox.isConnected || revision !== state.revision) return;
+          if (accepted) committed = checked;
+          checkbox.checked = committed;
+        });
+      });
+    }
+  }
+
   function setDocument(payload) {
     const revision = Number(payload.revision);
     if (!Number.isInteger(revision) || revision < state.revision) return false;
@@ -244,6 +291,7 @@
     // redirect the shell's own resource URLs and in-document fragment links.
     content.innerHTML = payload.html || "";
     installCodeCopyButtons();
+    installTaskCheckboxes(payload.tasksEditable);
     if (payload.baseUrl) {
       for (const img of content.querySelectorAll("img[src]")) {
         try {
@@ -286,6 +334,7 @@
 
   window.previewApi = {
     setDocument,
+    setTasksEditable,
     setTheme(dark) {
       const theme = dark ? "dark" : "light";
       if (document.documentElement.dataset.theme !== theme) {

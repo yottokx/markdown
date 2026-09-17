@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import math
 import os
+from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import quote
 
@@ -27,6 +28,7 @@ from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QApplication, QMenu, QVBoxLayout, QWidget
 
 from .image_sources import resolve_srcsets
+from .link_schemes import is_external_link
 from .managed_assets import resolve_managed_asset
 
 
@@ -38,6 +40,7 @@ class _PreviewPage(QWebEnginePage):
         self._shell_url = shell_url
         # Enabled only by the notebook shell for the currently displayed note.
         self.managed_assets_base: Path | None = None
+        self.allow_local_links = False
 
     def _managed_link(self, url: QUrl) -> Path | None:
         if self.managed_assets_base is None or not url.isLocalFile():
@@ -49,6 +52,17 @@ class _PreviewPage(QWebEnginePage):
         except (OSError, ValueError):
             return None
 
+    def _local_link(self, url: QUrl) -> Path | None:
+        if not self.allow_local_links or not url.isValid() or not url.isLocalFile():
+            return None
+        try:
+            path = Path(url.toLocalFile())
+            if path.is_absolute() and (path.is_file() or path.is_dir()):
+                return path
+        except (OSError, ValueError):
+            pass
+        return None
+
     def _is_shell_url(self, url: QUrl) -> bool:
         return url.isLocalFile() and os.path.normcase(url.toLocalFile()) == os.path.normcase(
             self._shell_url.toLocalFile()
@@ -57,8 +71,9 @@ class _PreviewPage(QWebEnginePage):
     def can_open_context_link(self, url: QUrl) -> bool:
         return (
             self._is_shell_url(url)
-            or url.scheme().lower() in {"http", "https", "mailto"}
+            or (url.isValid() and is_external_link(url.toString()))
             or self._managed_link(url) is not None
+            or self._local_link(url) is not None
         )
 
     def acceptNavigationRequest(
@@ -69,10 +84,10 @@ class _PreviewPage(QWebEnginePage):
         if self._is_shell_url(url):
             return True
         if navigation_type == QWebEnginePage.NavigationType.NavigationTypeLinkClicked:
-            if url.scheme().lower() in {"http", "https", "mailto"}:
+            if url.isValid() and is_external_link(url.toString()):
                 QDesktopServices.openUrl(url)
-            elif (asset := self._managed_link(url)) is not None:
-                # Only an explicit click opens the validated, current-note file.
+            elif (asset := self._managed_link(url) or self._local_link(url)) is not None:
+                # Only an explicit click opens a local file or folder.
                 # Keep it out of the embedded browser and discard URL parameters.
                 QDesktopServices.openUrl(QUrl.fromLocalFile(str(asset)))
         return False
@@ -172,6 +187,19 @@ class _PreviewBridge(QObject):
         clipboard.setText(text)
         return True
 
+    @Slot(int, int, bool, int, result=bool)
+    def toggleTask(self, line: int, column: int, checked: bool, revision: int) -> bool:
+        preview = self._preview
+        handler = preview._task_toggle_handler
+        if (
+            revision != preview._revision
+            or not 0 <= line < preview._line_count
+            or column < 0
+            or handler is None
+        ):
+            return False
+        return bool(handler(line, column, checked, revision))
+
     @Slot(float, int)
     def sourceScrolled(self, position: float, revision: int) -> None:
         preview = self._preview
@@ -219,6 +247,7 @@ class PreviewPane(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._dark = False
+        self._task_toggle_handler: Callable[[int, int, bool, int], bool] | None = None
         self._revision = -1
         self._line_count = 1
         self._shell_ready = False
@@ -269,6 +298,19 @@ class PreviewPane(QWidget):
                 "window.previewApi.setTheme(" + ("true" if self._dark else "false") + ");"
             )
 
+    def set_task_toggle_handler(
+        self, handler: Callable[[int, int, bool, int], bool] | None
+    ) -> None:
+        """Allow task edits only when the source owner can validate and apply them."""
+        self._task_toggle_handler = handler
+        editable = handler is not None
+        if self._pending_document is not None:
+            self._pending_document["tasksEditable"] = editable
+        if self._shell_ready:
+            self._page.runJavaScript(
+                "window.previewApi.setTasksEditable(" + ("true" if editable else "false") + ");"
+            )
+
     def set_sync_enabled(self, enabled: bool) -> None:
         self._sync_enabled = bool(enabled)
 
@@ -287,6 +329,7 @@ class PreviewPane(QWidget):
         self._pending_document = {
             "html": resolve_srcsets(html, QUrl.fromLocalFile(base_path).toString()),
             "lineCount": self._line_count,
+            "tasksEditable": self._task_toggle_handler is not None,
             "baseUrl": QUrl.fromLocalFile(base_path).toString(),
             "revision": revision,
         }

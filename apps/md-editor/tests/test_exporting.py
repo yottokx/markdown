@@ -345,6 +345,8 @@ def test_snapshot_file_links_are_preserved_without_embedding_linked_documents(tm
         '<a href="#section">Section</a>'
         '<a href="https://example.test/page">Web</a>'
         '<a href="mailto:test@example.test">Mail</a>'
+        '<a href="custom-demo://item/123">Custom</a>'
+        '<a href="vbscript:msgbox(1)">VBScript</a>'
         '<a href="javascript:evil()">Script</a>'
         '<a href="data:text/html,unsafe">Data</a>'
     )
@@ -356,6 +358,8 @@ def test_snapshot_file_links_are_preserved_without_embedding_linked_documents(tm
         "Section": "#section",
         "Web": "https://example.test/page",
         "Mail": "mailto:test@example.test",
+        "Custom": "custom-demo://item/123",
+        "VBScript": None,
         "Script": None,
         "Data": None,
     }
@@ -444,3 +448,17 @@ def test_export_keeps_user_html_that_uses_copy_ui_class_names(tmp_path):
     assert wrapper.select_one("button.code-copy-button").string == "ユーザーのボタン"
     assert "タグが異なる本文" in doc.get_text()
     assert not doc.select("[data-preview-code-ui]")
+
+
+def test_task_export_retains_checked_state_without_edit_coordinates(tmp_path):
+    fragment = (
+        '<input type="checkbox" data-task-line="0" data-task-column="3" checked>'
+        '<input type="checkbox" data-task-line="1" data-task-column="3">'
+    )
+    doc = soup(build_export_html(fragment, tmp_path, "Tasks"))
+    checkboxes = doc.select('input[type="checkbox"]')
+    assert len(checkboxes) == 2
+    assert checkboxes[0].has_attr("checked")
+    assert not checkboxes[1].has_attr("checked")
+    assert all(checkbox.has_attr("disabled") for checkbox in checkboxes)
+    assert not doc.select("[data-task-line], [data-task-column]")

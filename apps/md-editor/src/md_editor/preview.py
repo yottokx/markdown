@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import math
 import os
+from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QUrl, Signal, Slot
@@ -26,6 +27,7 @@ from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QApplication, QMenu, QVBoxLayout, QWidget
 
 from .image_sources import resolve_srcsets
+from .link_schemes import is_external_link
 
 
 class _PreviewPage(QWebEnginePage):
@@ -41,7 +43,7 @@ class _PreviewPage(QWebEnginePage):
         )
 
     def can_open_context_link(self, url: QUrl) -> bool:
-        return self._is_shell_url(url) or url.scheme().lower() in {"http", "https", "mailto"}
+        return self._is_shell_url(url) or (url.isValid() and is_external_link(url.toString()))
 
     def acceptNavigationRequest(
         self, url: QUrl, navigation_type: QWebEnginePage.NavigationType, is_main_frame: bool
@@ -50,9 +52,8 @@ class _PreviewPage(QWebEnginePage):
             return False
         if self._is_shell_url(url):
             return True
-        if (
-            navigation_type == QWebEnginePage.NavigationType.NavigationTypeLinkClicked
-            and url.scheme().lower() in {"http", "https", "mailto"}
+        if navigation_type == QWebEnginePage.NavigationType.NavigationTypeLinkClicked and (
+            url.isValid() and is_external_link(url.toString())
         ):
             QDesktopServices.openUrl(url)
         return False
@@ -152,6 +153,19 @@ class _PreviewBridge(QObject):
         clipboard.setText(text)
         return True
 
+    @Slot(int, int, bool, int, result=bool)
+    def toggleTask(self, line: int, column: int, checked: bool, revision: int) -> bool:
+        preview = self._preview
+        handler = preview._task_toggle_handler
+        if (
+            revision != preview._revision
+            or not 0 <= line < preview._line_count
+            or column < 0
+            or handler is None
+        ):
+            return False
+        return bool(handler(line, column, checked, revision))
+
     @Slot(float, int)
     def sourceScrolled(self, position: float, revision: int) -> None:
         preview = self._preview
@@ -199,6 +213,7 @@ class PreviewPane(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._dark = False
+        self._task_toggle_handler: Callable[[int, int, bool, int], bool] | None = None
         self._revision = -1
         self._line_count = 1
         self._shell_ready = False
@@ -249,6 +264,19 @@ class PreviewPane(QWidget):
                 "window.previewApi.setTheme(" + ("true" if self._dark else "false") + ");"
             )
 
+    def set_task_toggle_handler(
+        self, handler: Callable[[int, int, bool, int], bool] | None
+    ) -> None:
+        """Allow task edits only when the source owner can validate and apply them."""
+        self._task_toggle_handler = handler
+        editable = handler is not None
+        if self._pending_document is not None:
+            self._pending_document["tasksEditable"] = editable
+        if self._shell_ready:
+            self._page.runJavaScript(
+                "window.previewApi.setTasksEditable(" + ("true" if editable else "false") + ");"
+            )
+
     def set_sync_enabled(self, enabled: bool) -> None:
         self._sync_enabled = bool(enabled)
 
@@ -267,6 +295,7 @@ class PreviewPane(QWidget):
         self._pending_document = {
             "html": resolve_srcsets(html, QUrl.fromLocalFile(base_path).toString()),
             "lineCount": self._line_count,
+            "tasksEditable": self._task_toggle_handler is not None,
             "baseUrl": QUrl.fromLocalFile(base_path).toString(),
             "revision": revision,
         }

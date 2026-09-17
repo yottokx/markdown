@@ -111,7 +111,7 @@ def test_tasklists_and_strikethrough_are_rendered():
     elements = Elements(rendered.html)
     inputs = [attrs for tag, attrs in elements.tags if tag == "input"]
     assert len(inputs) == 2
-    assert all("disabled" in attrs for attrs in inputs)
+    assert all("disabled" not in attrs for attrs in inputs)
     assert "checked" in inputs[0]
     assert "checked" not in inputs[1]
     assert "<s>pending</s>" in rendered.html
