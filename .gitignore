@@ -27,3 +27,6 @@ Thumbs.db
 
 # Repository ZIP exports
 /exports/
+
+# Local reference materials
+/references/
