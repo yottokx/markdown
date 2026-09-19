@@ -25,6 +25,7 @@ from PySide6.QtWebEngineCore import (
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QApplication, QMenu, QVBoxLayout, QWidget
+from shiboken6 import isValid
 
 from .image_sources import resolve_srcsets
 from .link_schemes import is_external_link
@@ -207,6 +208,11 @@ class _PreviewBridge(QObject):
                 max(0.0, min(position, float(preview._line_count) - 1e-6)), revision, token
             )
 
+    @Slot(int)
+    def zoomRestored(self, token: int) -> None:
+        if token == self._preview._pending_zoom_token:
+            self._preview._pending_zoom_token = None
+
 
 class PreviewPane(QWidget):
     """Preview widget; ``view`` exposes the QWebEngineView for diagnostics.
@@ -239,6 +245,9 @@ class PreviewPane(QWidget):
         self._pending_scroll: tuple[float, int] | None = None
         self._pending_view_restore: tuple[float, int, int] | None = None
         self._view_restore_token = -1
+        self._zoom_factor = 1.0
+        self._zoom_token = 0
+        self._pending_zoom_token: int | None = None
 
         shell_path = Path(__file__).resolve().parent / "resources" / "preview.html"
         self._shell_url = QUrl.fromLocalFile(str(shell_path))
@@ -272,6 +281,33 @@ class PreviewPane(QWidget):
 
     def page(self) -> QWebEnginePage:
         return self._page
+
+    def set_zoom_factor(self, factor: float) -> None:
+        """Zoom the browser after preserving its own logical source position."""
+        factor = float(factor)
+        if not math.isfinite(factor) or not 0.25 <= factor <= 5.0:
+            raise ValueError("Preview zoom must be between 0.25 and 5.0")
+        if factor == self._zoom_factor:
+            return
+        self._zoom_factor = factor
+        self._zoom_token += 1
+        token = self._zoom_token
+        if not self._shell_ready:
+            self.view.setZoomFactor(factor)
+            return
+        self._pending_zoom_token = token
+
+        def apply_zoom(started: bool) -> None:
+            # JavaScript callbacks can arrive after another request or deletion.
+            if not isValid(self) or token != self._zoom_token:
+                return
+            if not started:
+                self._pending_zoom_token = None
+                return
+            self.view.setZoomFactor(factor)
+            self._page.runJavaScript(f"window.previewApi.finishZoom({token});")
+
+        self._page.runJavaScript(f"window.previewApi.beginZoom({token});", apply_zoom)
 
     def apply_theme(self, dark: bool) -> None:
         self._dark = bool(dark)

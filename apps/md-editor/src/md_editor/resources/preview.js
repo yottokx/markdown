@@ -18,6 +18,8 @@
     pendingReady: false,
     pendingViewRestore: null,
     viewRestoreToken: -1,
+    pendingZoom: null,
+    zoomToken: -1,
     rendering: false,
     renderGeneration: 0,
     bridge: null,
@@ -157,11 +159,19 @@
     if (state.layoutFrame) return;
     state.layoutFrame = requestAnimationFrame(() => {
       state.layoutFrame = 0;
+      // Wait until the native zoom is applied. A hidden view resumes this RAF
+      // when shown, so its display-mode restore can supply the newest source.
+      if (state.pendingZoom && !state.pendingZoom.applied) return;
+      const zoom = state.pendingZoom;
       const restore = state.pendingViewRestore;
       const preservedSource = restore && restore.revision === state.revision
         ? restore.source : state.source;
       measureAnchors();
       moveToSource(preservedSource);
+      if (zoom) {
+        state.pendingZoom = null;
+        if (state.bridge) state.bridge.zoomRestored(zoom.token);
+      }
       if (state.pendingReady && !state.rendering && state.bridge) {
         state.pendingReady = false;
         state.bridge.documentReady(state.revision);
@@ -322,7 +332,7 @@
   window.addEventListener("scroll", () => {
     // A wider viewport can clamp scrollY before its RAF replaces the anchor map.
     // That clamp is layout feedback, not navigation in the old source map.
-    if (state.pendingViewRestore || state.layoutFrame || state.rendering) return;
+    if (state.pendingViewRestore || state.pendingZoom || state.layoutFrame || state.rendering) return;
     const y = window.scrollY;
     if (state.suppressedAtY !== null && Math.abs(y - state.suppressedAtY) <= 0.75) return;
     state.suppressedAtY = null;
@@ -330,7 +340,7 @@
     if (state.reportFrame) return;
     state.reportFrame = requestAnimationFrame(() => {
       state.reportFrame = 0;
-      if (state.pendingViewRestore || state.layoutFrame || state.rendering) return;
+      if (state.pendingViewRestore || state.pendingZoom || state.layoutFrame || state.rendering) return;
       if (state.suppressedAtY !== null && Math.abs(window.scrollY - state.suppressedAtY) <= 0.75) return;
       state.source = sourceForY(window.scrollY);
       if (state.bridge) state.bridge.sourceScrolled(state.source, state.revision);
@@ -356,6 +366,40 @@
       }
       scheduleLayout();
     },
+    beginZoom(token) {
+      token = Number(token);
+      if (!Number.isInteger(token) || token <= state.zoomToken) return false;
+      let reportScroll = false;
+      if (!state.pendingZoom && !state.pendingViewRestore && !state.layoutFrame && !state.rendering) {
+        // Include a user scroll whose browser event has not yet been delivered.
+        if (state.suppressedAtY === null || Math.abs(scrollY - state.suppressedAtY) > 0.75) {
+          const measured = sourceForY(scrollY);
+          reportScroll = Boolean(state.reportFrame) || Math.abs(measured - state.source) > 1e-7;
+          state.source = measured;
+        }
+      }
+      state.zoomToken = token;
+      state.pendingZoom = { token, applied: false };
+      if (state.reportFrame) {
+        cancelAnimationFrame(state.reportFrame);
+        state.reportFrame = 0;
+      }
+      // Flush only navigation that preceded zoom. Otherwise cancelling its RAF
+      // would leave the source pane and saved preview position one event behind.
+      if (reportScroll && state.bridge) state.bridge.sourceScrolled(state.source, state.revision);
+      return true;
+    },
+    finishZoom(token) {
+      if (!state.pendingZoom || state.pendingZoom.token !== Number(token)) return false;
+      // Cross a rendering frame before measuring the new CSS viewport. The
+      // pending token suppresses Chromium's intermediate scroll-limit clamp.
+      requestAnimationFrame(() => {
+        if (!state.pendingZoom || state.pendingZoom.token !== Number(token)) return;
+        state.pendingZoom.applied = true;
+        scheduleLayout();
+      });
+      return true;
+    },
     restoreView(source, revision, token) {
       source = Number(source);
       revision = Number(revision);
@@ -376,7 +420,7 @@
     },
     scrollToSource(source, revision) {
       if (Number(revision) !== state.revision || state.pendingViewRestore) return false;
-      if (state.layoutFrame && state.pendingReady) {
+      if (state.pendingZoom || (state.layoutFrame && state.pendingReady)) {
         state.source = clamp(Number(source) || 0, 0, state.lineCount - 1e-6);
       } else {
         moveToSource(source);
@@ -387,6 +431,7 @@
       return {
         revision: state.revision,
         rendering: state.rendering,
+        zooming: state.pendingZoom !== null,
         lineCount: state.lineCount,
         maxSource: state.maxSource,
         anchors: state.anchors.map(point => ({ ...point })),

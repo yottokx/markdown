@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 
 from PySide6.QtCore import QRect, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QFont, QPainter, QTextCursor
+from PySide6.QtGui import QFont, QPainter, QTextCursor, QTextDocument
 from PySide6.QtWidgets import QPlainTextEdit, QWidget
 
 from .highlighter import MarkdownHighlighter
@@ -82,6 +82,34 @@ class SourceEditor(MarkdownEditingMixin, QPlainTextEdit):
         )
         self.scroll_to_source(position)
         self._schedule_position()
+
+    def set_source_font(self, font: QFont) -> None:
+        """Change presentation while preserving the source position and document."""
+        if font == self.font():
+            return
+        position = self.source_position()
+        self.setFont(font)
+        self._update_font_metrics()
+        self.scroll_to_source(position)
+        self._schedule_position()
+
+    def setDocument(self, document: QTextDocument) -> None:
+        # QPlainTextEdit keeps the widget font but adopts the new document's
+        # default font and tab stops unless they are applied explicitly.
+        document.setDefaultFont(self.font())
+        super().setDocument(document)
+        self._update_font_metrics()
+
+    def _update_font_metrics(self) -> None:
+        self.setTabStopDistance(self.fontMetrics().horizontalAdvance(" ") * 2)
+        if hasattr(self, "gutter"):
+            self.gutter.setFont(self.font())
+            self._update_gutter_width()
+            rect = self.contentsRect()
+            self.gutter.setGeometry(
+                QRect(rect.left(), rect.top(), self.gutter_width(), rect.height())
+            )
+            self.gutter.update()
 
     def source_position(self) -> float:
         block = self.firstVisibleBlock()

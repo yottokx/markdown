@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 
 from md_editor.application_icon import application_icon, set_windows_app_user_model_id
 from md_editor.display_modes import DisplayModes
+from md_editor.display_preferences import DisplayPreferences
 from md_editor.document import DocumentSession
 from md_editor.export_dialog import ExportActions
 from md_editor.file_actions import FileActions
@@ -38,7 +39,9 @@ from md_editor.window_chrome import ChromeMainWindow
 RESOURCE_DIR = Path(__file__).resolve().parent / "resources"
 
 
-class MainWindow(DisplayModes, FileActions, EditingActions, ExportActions, ChromeMainWindow):
+class MainWindow(
+    DisplayModes, DisplayPreferences, FileActions, EditingActions, ExportActions, ChromeMainWindow
+):
     def __init__(self, settings: QSettings | None = None) -> None:
         set_windows_app_user_model_id()
         super().__init__()
@@ -121,6 +124,7 @@ class MainWindow(DisplayModes, FileActions, EditingActions, ExportActions, Chrom
         self.statusBar().showMessage("準備完了")
         QApplication.styleHints().colorSchemeChanged.connect(self._system_theme_changed)
         self.apply_theme(self.theme_mode, persist=False)
+        self.load_display_preferences()
         self.set_display_mode(str(self.settings.value("display/mode", "split")), persist=False)
         self._update_title()
         self._update_positions()
@@ -136,6 +140,7 @@ class MainWindow(DisplayModes, FileActions, EditingActions, ExportActions, Chrom
         tools_menu = self.menuBar().addMenu("ツール(&T)")
         self.init_display_modes(view_menu)
         view_menu.addSeparator()
+        self.init_display_preferences(view_menu)
 
         def action(menu, text, callback, shortcut=None, source_context=False):
             result = QAction(text, self)

@@ -193,3 +193,18 @@ Qt検証は `QT_QPA_PLATFORM=offscreen`、`QTWEBENGINE_CHROMIUM_FLAGS=--disable-
 - `test_selection_mapping.py`、`test_preview_selection_sync.py`、`test_notebook_selection_sync.py` で位置対応、実マウス／キー選択、構文境界、絵文字、コピー、本文・Undo・DOM不変、ノート切り替え、画像URL、フォーカス移動時の非同期競合を検証します。
 
 選択同期追加後の検証では `pytest --dev` の全1,222件、`ruff check`、`ruff format --check` が成功しました。`QT_QPA_PLATFORM=offscreen`、`QTWEBENGINE_CHROMIUM_FLAGS=--disable-gpu` と既存環境の `uv run --locked --no-sync` を使用し、ビルドは行っていません。
+
+## ソースのフォントとプレビュー倍率
+
+- 「表示」メニューからソースのフォント・文字サイズ（6〜72pt）、プレビュー倍率（25〜500%）を変更できます。ソースの標準はCascadia Mono・11pt、倍率の標準は100%です。
+- `display_preferences.py` がメニュー・入力・アプリ別設定を管理します。`display/sourceFont` にQFontの文字列表現、`display/previewZoom` に倍率を保存し、起動時に読み込みます。キャンセル時は変更せず、不正な保存値は標準へ戻します。
+- ソースは `SourceEditor.set_source_font` で上端の論理行位置を保存し、フォント、タブ幅、行番号欄を更新して折り返しを再計算し、同じ内容位置へ戻して同期を通知します。文字位置・選択・Undo履歴は維持します。折り返し途中の位置はQtの表示行単位に丸めます。
+- プレビューは `PreviewPane.set_zoom_factor` でWebEngineの表示倍率を変更し、Markdown行と描画位置の対応を再計測・復元します。倍率変更と文書更新・表示切替が重なっても古い非同期通知で位置を上書きしないようにします。 倍率変更と表示復元には独立した世代番号を使い、倍率変更直前に未通知のユーザースクロールがあれば先に同期します。
+- `test_editor.py`、`test_preview_zoom.py`、`test_display_preferences.py` でフォント・倍率変更、折り返し途中、先頭・末尾、双方向同期、同期OFF、単独ペイン、設定の保存・復元、本文と選択・Undoの保持を検証します。
+- ノートの切替時は `SourceEditor.setDocument` が新しい文書の既定フォントとタブ幅を現在の表示設定へ合わせます。既存の別ノートへ戻ってもフォント・倍率を維持し、保存本文・文書リビジョン・Undo履歴へ影響しないことを統合テストで確認します。
+
+### 2026-09-19 検証
+
+`uv run --locked --no-sync pytest --dev -q` の最終全体実行は全1,271件成功・終了コード0。`ruff check src tests packaging tools` と `ruff format --check src tests packaging tools` も成功しました。開発用設定、Qt非表示モード、WebEngineのGPU無効で実行しています。最終ログは `artifacts/display-preferences-pytest-final.txt` です。EXEの再ビルドは行っていません。
+
+初回全体実行は1,270件成功、既存の `test_dialog_background_and_controls_use_the_owning_window_theme[True]` のPlaceholderText比較で1件失敗しました。過去の記録と同じ症状で、単独1件・対象ファイル17件が成功し、続く全体実行でも成功しました。該当の配色処理・テストは変更していません。個別のWebEngine試験には判定完了後のネイティブアクセス違反もありましたが、最終の統合16件と全体実行は正常終了しています。
