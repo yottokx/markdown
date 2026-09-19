@@ -180,3 +180,16 @@ Qt検証は `QT_QPA_PLATFORM=offscreen`、`QTWEBENGINE_CHROMIUM_FLAGS=--disable-
 - `test_search.py` で検索結果の再利用と編集直後の移動を、Notebook統合テストで連続移動中のCSS Highlight・本文DOMの維持と再描画が発生しないことを検証します。
 
 2026-09-17の検証では `pytest --dev` の全1,182件、`ruff check`、`ruff format --check` が成功しました。`QT_QPA_PLATFORM=offscreen`、`QTWEBENGINE_CHROMIUM_FLAGS=--disable-gpu` と既存環境の `uv run --locked --no-sync` を使用し、ビルドは行っていません。
+
+## 選択範囲の左右同期
+
+- 左右どちらで文字を選択しても、対応する範囲をもう片方のペインでも選択します。逆方向の選択を維持し、フォーカスは操作したペインに残します。検索バーの表示状態には依存せず、本文・Undo履歴・保存日時を変更しません。
+- 左から右への同期では、選択範囲内の最初と最後の表示文字に合わせます。開始位置がMarkdown記号の途中なら、その後にある表示文字から選択します。終了位置が記号の途中なら、直前の表示文字まで選択します。記号だけの選択では右の選択を解除し、元の選択範囲を越えて広げません。
+- 右から左への同期では、最初と最後の表示文字に対応するソースを連続した範囲として選択します。途中にあるMarkdown記号はその範囲に含まれます。画像・数式・図は要素単位で対応させます。
+- `selection_mapping.py` がMarkdown解析中の文字位置を保持し、`RenderedDocument.selection_map` で表示要素と元本文のUTF-16位置を渡します。同じ語の出現順を検索して位置を推測しません。画像のキャッシュ用URL書き換えは位置をずらさないようHTML生成後に行います。
+- `selection-sync.js` はDOM Rangeとブラウザの標準選択を更新します。選択操作のたびにMarkdownの再描画やDOMの置き換えは行いません。本文更新・数式や図の再描画時はDOMとの対応を作り直します。HTML／PDF出力からは選択同期用属性を除去します。
+- `selection_sync.py` は選択変更をまとめて送り、描画リビジョンと選択の世代番号で古い通知を拒否します。同期による選択変更を送り返すループを防ぎ、ノート切り替えや表示モード変更に追従します。コピーは最後に操作したペインの選択を使用します。
+- フォーカスだけを移した場合は保留中のソース選択を引き継ぎ、移動先で新しく選択した場合はその操作を優先します。JavaScript側でも新しいブラウザ選択を識別し、送信済みの古い要求が遅れて届いても上書きしません。
+- `test_selection_mapping.py`、`test_preview_selection_sync.py`、`test_notebook_selection_sync.py` で位置対応、実マウス／キー選択、構文境界、絵文字、コピー、本文・Undo・DOM不変、ノート切り替え、画像URL、フォーカス移動時の非同期競合を検証します。
+
+選択同期追加後の検証では `pytest --dev` の全1,222件、`ruff check`、`ruff format --check` が成功しました。`QT_QPA_PLATFORM=offscreen`、`QTWEBENGINE_CHROMIUM_FLAGS=--disable-gpu` と既存環境の `uv run --locked --no-sync` を使用し、ビルドは行っていません。

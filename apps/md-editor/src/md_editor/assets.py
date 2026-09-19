@@ -22,6 +22,7 @@ from PySide6.QtGui import QImage, QImageReader
 
 from .image_sources import parse_srcset
 from .math_parser import math_plugin
+from .selection_mapping import MappedText
 
 
 @dataclass(frozen=True, slots=True)
@@ -313,7 +314,10 @@ def rewrite_destinations(source: str, replacement: Callable[[Destination], str |
         if value is not None and value != destination.url:
             if destination.is_html:
                 value = escape(value, quote=True)
-            source = source[: destination.start] + value + source[destination.end :]
+            if isinstance(source, MappedText):
+                source = source.replace_slice(destination.start, destination.end, value)
+            else:
+                source = source[: destination.start] + value + source[destination.end :]
     return source
 
 

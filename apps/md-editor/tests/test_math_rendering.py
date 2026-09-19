@@ -1,6 +1,7 @@
 from html.parser import HTMLParser
 
 import pytest
+from bs4 import BeautifulSoup
 
 from md_editor.rendering import render_markdown
 
@@ -165,7 +166,11 @@ def test_mermaid_fence_is_one_escaped_node_and_one_whole_block_anchor(fence):
         "data-render-kind": "mermaid",
         "data-source-line": "2",
         "data-source-end": "6",
+        "data-selection-id": node["attrs"]["data-selection-id"],
     }
+    assert any(
+        entry["id"] == node["attrs"]["data-selection-id"] for entry in rendered.selection_map
+    )
     assert node["text"] == content
     assert not any(tag == "img" for tag, _ in parsed.tags)
     assert "&lt;img" in rendered.html
@@ -210,8 +215,8 @@ def test_raw_html_cannot_impersonate_math_mermaid_or_scroll_nodes():
 
 def test_sanitizing_paired_inline_html_keeps_nesting_around_generated_math():
     rendered = render_markdown('Text <em data-render-kind="mermaid">safe $x$</em> end')
-    assert (
-        '<em>safe <span class="math-inline" data-render-kind="math-inline">x</span></em>'
-        in rendered.html
-    )
+    emphasis = BeautifulSoup(rendered.html, "html.parser").em
+    assert emphasis.get_text() == "safe x"
+    assert "data-render-kind" not in emphasis.attrs
+    assert emphasis.select_one('.math-inline[data-render-kind="math-inline"]').get_text() == "x"
     assert len(RenderNodes(rendered.html).nodes) == 1

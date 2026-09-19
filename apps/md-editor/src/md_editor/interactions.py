@@ -91,7 +91,7 @@ class EditingActions(ImageActions):
     def refresh_edit_actions(self, *_args):
         selected = self.editor.textCursor().hasSelection()
         editable = not self.editor.isReadOnly()
-        preview_only = getattr(self, "display_mode", "split") == "preview"
+        preview_only = self.preview_edit_target()
         copy_available = bool(self.preview.page().selectedText()) if preview_only else selected
         self.insert_menu.setEnabled(editable)
         self.insert_timestamp_action.setEnabled(editable)

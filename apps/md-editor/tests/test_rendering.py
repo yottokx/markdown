@@ -1,6 +1,7 @@
 from html.parser import HTMLParser
 
 import pytest
+from bs4 import BeautifulSoup
 
 from md_editor.rendering import render_markdown
 
@@ -114,7 +115,7 @@ def test_tasklists_and_strikethrough_are_rendered():
     assert all("disabled" not in attrs for attrs in inputs)
     assert "checked" in inputs[0]
     assert "checked" not in inputs[1]
-    assert "<s>pending</s>" in rendered.html
+    assert BeautifulSoup(rendered.html, "html.parser").s.get_text() == "pending"
 
 
 def test_render_is_fragment_and_never_rewrites_source_text():

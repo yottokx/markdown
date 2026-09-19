@@ -97,3 +97,17 @@ Qt検証は `QT_QPA_PLATFORM=offscreen`、`QTWEBENGINE_CHROMIUM_FLAGS=--disable-
 - `test_task_lists.py`、`test_task_preview.py`、`test_preview_task_editing.py` で入れ子・引用・番号付きリスト、クリック範囲、ライト／ダーク表示、本文連動、Undo／Redo、古いリビジョンの拒否を検証します。
 
 チェック操作追加後の全回帰テストは852件成功し、`ruff check` と `ruff format --check` も成功しました。 並列実行で失敗した既存の表示切り替え時スクロールテストも、単独の全体再実行で成功しました。 非表示・GPU無効の既存環境で実行し、ビルドは行っていません。
+
+## 検索ハイライトと選択範囲の左右同期
+
+- `Ctrl+F` の検索語を左のMarkdown本文と右の表示テキストでハイライトします。大小文字・正規表現は同じPythonの検索条件を使用し、表示は左右とも最大1,000一致です。件数・次／前・置換の対象はMarkdown本文です。表示されない記号やリンク先URLは左だけが対象になります。
+- `SearchHighlights` が描画後の表示テキストを取得し、検索範囲をCSS Highlightへ渡します。検索バーを閉じる、空の検索語、無効な正規表現ではハイライトを解除します。編集・置換・Undo／Redo・ファイル変更・テーマ変更・再描画に追従し、世代と文書リビジョンで古い通知を拒否します。
+- 次／前への移動は検索結果と左右のハイライトを再利用します。現在の一致箇所は通常の選択同期で右にも表示し、移動ごとに本文DOMやハイライトを作り直しません。
+- 左右どちらで選択しても、対応する範囲をもう片方でも選択します。逆向きの選択と操作側のフォーカスを保持します。左の選択がMarkdown記号の途中で始まる場合は、選択範囲内の次の表示文字から右を選択し、終了が記号の途中なら直前の表示文字までにします。記号だけの選択では相手側を解除します。
+- 右から左では最初と最後の表示文字に対応する連続したソース範囲を選択し、間の構文記号も含めます。数式・図・画像は要素単位で対応します。コピーは最後に操作したペインの選択を使い、本文・Undo履歴・保存状態は変更しません。
+- `selection_mapping.py` が解析中の元文字位置を保持し、`selection-sync.js` がUTF-16位置とDOM Rangeを対応させます。`selection_sync.py` はQt側の選択と連動し、描画リビジョン・選択の世代・操作側を確認して同期の往復と遅延要求による上書きを防ぎます。
+- md-editorのプレビューでは `MappedText` を参照URLの正規化にも渡します。`rewrite_destinations` が変更後URLを元のURL範囲に対応させ、`render_markdown(..., original_source=source)` が元本文基準の位置を生成します。保存先変更後や画像復元後のUndoで表示URLの長さが変わっても、その後の文字位置を維持します。画像キャッシュのURL書き換えはHTML生成後に行います。
+- 選択・検索の操作で本文DOMを置き換えず、HTML／PDF出力からは選択同期の内部属性を除去します。`test_search_highlight*.py`、`test_selection_mapping.py`、`test_preview_selection_sync.py`、`test_selection_sync.py` が検索条件、ネイティブ選択、非同期競合、保存・Undoとの整合性を検証します。
+- コードブロックの検索テキストは生成された行要素の境界から改行を補い、空行用のBRを二重に数えません。別行をつなげた誤一致を防ぎ、複数行の正規表現も表示どおりの改行数で判定します。
+
+2026-09-17の最終検証では `pytest -q` の全923件、`ruff check`、`ruff format --check` が成功しました。`QT_QPA_PLATFORM=offscreen`、`QTWEBENGINE_CHROMIUM_FLAGS=--disable-gpu` と既存環境の `uv run --locked --no-sync` を使用しました。ビルドは実行していません。

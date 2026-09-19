@@ -19,6 +19,7 @@ from .code_highlighting import highlight_code_lines
 from .image_sources import parse_srcset
 from .link_schemes import is_safe_link, link_scheme
 from .math_parser import math_plugin
+from .selection_mapping import mapped_html, selection_mapping_plugin, source_span
 from .task_lists import tasklists_plugin
 
 
@@ -29,6 +30,7 @@ class RenderedDocument:
     html: str
     line_count: int
     task_markers: tuple[tuple[int, int], ...] = ()
+    selection_map: tuple[dict[str, Any], ...] = ()
 
 
 _TAGS = {
@@ -156,7 +158,7 @@ def _sanitize(fragment: str, *, source_attributes: bool = False) -> str:
     # HTML is cleaned first and cannot impersonate anchors or render nodes.
     attributes = {tag: set(names) for tag, names in _ATTRIBUTES.items()}
     if source_attributes:
-        attributes["*"].update(_SOURCE_ATTRIBUTES | {"data-render-kind"})
+        attributes["*"].update(_SOURCE_ATTRIBUTES | {"data-render-kind", "data-selection-id"})
         attributes["code"] = {"data-code-source"}
         attributes["input"].update({"data-task-line", "data-task-column"})
     return nh3.clean(
@@ -179,6 +181,59 @@ class _SourceRenderer(RendererHTML):
     def __init__(self, parser: Any = None) -> None:
         self._protected_inline: list[dict[str, str]] = []
         super().__init__(parser)
+
+    def _protect(self, fragment: str) -> str:
+        marker = "\ue000marknotes-generated-" + uuid4().hex + "\ue001"
+        self._protected_inline[-1][marker] = fragment
+        return marker
+
+    @staticmethod
+    def _selection_attribute(token, env, *, atomic=False):
+        mapping = env.get("selection_mapping")
+        if mapping is None:
+            return ""
+        text = token.meta.get("selection_text", "")
+        identifier = (
+            mapping.atomic(token.meta.get("selection_atomic", source_span(text)))
+            if atomic
+            else mapping.text(text)
+        )
+        return f' data-selection-id="{identifier}"' if identifier else ""
+
+    def text(self, tokens, idx, options, env):
+        token = tokens[idx]
+        content = super().text(tokens, idx, options, env)
+        attribute = self._selection_attribute(token, env)
+        return self._protect(f"<span{attribute}>{content}</span>") if attribute else content
+
+    def code_inline(self, tokens, idx, options, env):
+        token = tokens[idx]
+        attribute = self._selection_attribute(token, env)
+        fragment = f"<code{attribute}>{escape(token.content)}</code>"
+        return self._protect(fragment)
+
+    def image(self, tokens, idx, options, env):
+        fragment = super().image(tokens, idx, options, env)
+        attribute = self._selection_attribute(tokens[idx], env, atomic=True)
+        if attribute:
+            fragment = fragment.replace("<img", "<img" + attribute, 1)
+        return self._protect(fragment)
+
+    def softbreak(self, tokens, idx, options, env):
+        attribute = self._selection_attribute(tokens[idx], env)
+        return self._protect(f"<span{attribute}>\n</span>") if attribute else "\n"
+
+    def hardbreak(self, tokens, idx, options, env):
+        attribute = self._selection_attribute(tokens[idx], env, atomic=True)
+        return self._protect(f"<br{attribute}>\n") if attribute else "<br>\n"
+
+    def html_inline(self, tokens, idx, options, env):
+        token = tokens[idx]
+        mapping = env.get("selection_mapping")
+        text = token.meta.get("selection_text")
+        if mapping is not None and text is not None:
+            return mapped_html(text, mapping, self._protect, _sanitize)
+        return token.content
 
     def renderInline(self, tokens: list[Token], options: Any, env: dict[str, Any]) -> str:
         # Clean paired inline HTML together. Generated controls/math travel through the
@@ -216,24 +271,26 @@ class _SourceRenderer(RendererHTML):
         self._protected_inline[-1][marker] = fragment
         return marker
 
-    def _inline_math(self, token: Token, *, display: bool) -> str:
+    def _inline_math(self, token: Token, env, *, display: bool) -> str:
         kind = "math-block" if display else "math-inline"
-        fragment = f'<span class="{kind}" data-render-kind="{kind}">{escape(token.content)}</span>'
+        attribute = self._selection_attribute(token, env, atomic=True)
+        fragment = f'<span class="{kind}" data-render-kind="{kind}"{attribute}>{escape(token.content)}</span>'
         marker = "\ue000marknotes-math-" + uuid4().hex + "\ue001"
         self._protected_inline[-1][marker] = fragment
         return marker
 
     def math_inline(self, tokens, idx, options, env) -> str:
-        return self._inline_math(tokens[idx], display=False)
+        return self._inline_math(tokens[idx], env, display=False)
 
     def math_inline_display(self, tokens, idx, options, env) -> str:
-        return self._inline_math(tokens[idx], display=True)
+        return self._inline_math(tokens[idx], env, display=True)
 
     def math_block(self, tokens, idx, options, env) -> str:
         token = tokens[idx]
         start, end = token.map or (0, 1)
+        attribute = self._selection_attribute(token, env, atomic=True)
         return (
-            f'<div class="math-block" data-render-kind="math-block" {_anchor(start, end)}>'
+            f'<div class="math-block" data-render-kind="math-block" {_anchor(start, end)}{attribute}>'
             + escape(token.content)
             + "</div>\n"
         )
@@ -255,7 +312,21 @@ class _SourceRenderer(RendererHTML):
 
     def html_block(self, tokens: list[Token], idx: int, options: Any, env: dict[str, Any]) -> str:
         token = tokens[idx]
-        cleaned = _sanitize(token.content)
+        protected = {}
+        self._protected_inline.append(protected)
+        try:
+            mapping = env.get("selection_mapping")
+            source = token.meta.get("selection_text")
+            fragment = (
+                mapped_html(source, mapping, self._protect, _sanitize)
+                if mapping is not None and source is not None
+                else token.content
+            )
+            cleaned = _sanitize(fragment)
+        finally:
+            self._protected_inline.pop()
+        for marker, fragment in protected.items():
+            cleaned = cleaned.replace(marker, fragment)
         if not cleaned.strip():
             return ""
         start, end = token.map or (0, 1)
@@ -266,18 +337,19 @@ class _SourceRenderer(RendererHTML):
         language = token.info.strip().split(maxsplit=1)[0] if token.info.strip() else ""
         if language.casefold() == "mermaid":
             start, end = token.map or (0, 1)
+            attribute = self._selection_attribute(token, env, atomic=True)
             return (
-                f'<div class="mermaid-block" data-render-kind="mermaid" {_anchor(start, end)}>'
+                f'<div class="mermaid-block" data-render-kind="mermaid" {_anchor(start, end)}{attribute}>'
                 + escape(token.content)
                 + "</div>\n"
             )
-        return self._code(token, fenced=True)
+        return self._code(token, env, fenced=True)
 
     def code_block(self, tokens: list[Token], idx: int, options: Any, env: dict[str, Any]) -> str:
-        return self._code(tokens[idx], fenced=False)
+        return self._code(tokens[idx], env, fenced=False)
 
     @staticmethod
-    def _code(token: Token, *, fenced: bool) -> str:
+    def _code(token: Token, env, *, fenced: bool) -> str:
         start, end = token.map or (0, 1)
         highlighted = highlight_code_lines(token.content, token.info)
         lines = list(highlighted.lines)
@@ -290,13 +362,25 @@ class _SourceRenderer(RendererHTML):
         if fenced:
             parts.append(f'<span class="code-boundary" {_anchor(start, start + 1)}></span>')
         content_start = start + int(fenced)
+        source = token.meta.get("selection_text")
+        mapping = env.get("selection_mapping")
+        source_lines = token.content.split("\n")
+        position = 0
         for offset, line in enumerate(lines):
             line_number = content_start + offset
+            length = len(source_lines[offset])
+            identifier = (
+                mapping.text(source[position : position + length])
+                if mapping is not None and source is not None
+                else None
+            )
+            attribute = f' data-selection-id="{identifier}"' if identifier else ""
+            position += length + 1
             # A BR gives empty code rows real height without inserting spaces
             # or zero-width characters into copied code.
             content = line if line else "<br>"
             parts.append(
-                f'<span class="code-line" {_anchor(line_number, line_number + 1)}>{content}</span>'
+                f'<span class="code-line" {_anchor(line_number, line_number + 1)}{attribute}>{content}</span>'
             )
         content_end = content_start + len(lines)
         if fenced and content_end < end:
@@ -322,6 +406,7 @@ def render_markdown(source: str) -> RenderedDocument:
     parser.enable(["table", "strikethrough"])
     parser.use(tasklists_plugin)
     parser.use(math_plugin)
+    parser.use(selection_mapping_plugin)
     env: dict[str, Any] = {}
     tokens = parser.parse(source, env)
     for token in tokens:
@@ -338,8 +423,12 @@ def render_markdown(source: str) -> RenderedDocument:
             if style in {"text-align:left", "text-align:center", "text-align:right"}:
                 token.attrSet("align", style.removeprefix("text-align:"))
     html = parser.renderer.render(tokens, parser.options, env)
+    html = _sanitize(html, source_attributes=True)
+    identifiers = set(re.findall(r'data-selection-id="(s\d+)"', html))
+    mapping = env.get("selection_mapping")
     return RenderedDocument(
-        html=_sanitize(html, source_attributes=True),
+        html=html,
         line_count=len(source.split("\n")),
         task_markers=tuple(env.get("task_markers", ())),
+        selection_map=tuple(entry for entry in mapping.entries if entry["id"] in identifiers),
     )

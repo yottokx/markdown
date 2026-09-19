@@ -29,6 +29,7 @@ from marknotes.menu_theme import apply_window_menu_theme
 from marknotes.preview import PreviewPane
 from marknotes.rendering import render_markdown
 from marknotes.search import SearchBar, qt_position
+from marknotes.selection_sync import SelectionSync
 from marknotes.task_lists import task_marker_column
 from marknotes.theme import palette
 from marknotes.ui_icons import outline_icon
@@ -123,6 +124,7 @@ class MainWindow(DisplayModes, FileActions, EditingActions, ExportActions, Chrom
         self.set_display_mode(str(self.settings.value("display/mode", "split")), persist=False)
         self._update_title()
         self._update_positions()
+        self.selection_sync = SelectionSync(self)
 
     def _build_actions(self) -> None:
         file_menu = self.menuBar().addMenu("ファイル(&F)")
@@ -390,11 +392,18 @@ class MainWindow(DisplayModes, FileActions, EditingActions, ExportActions, Chrom
             source, history_key=self.editor.document().availableUndoSteps()
         )
         self.sync_image_watches()
-        rendered = render_markdown(
-            self.image_preview_source(self.session.normalize_references(source))
-        )
+        rendered = render_markdown(self.session.normalize_references(source))
         self._preview_task_markers = set(rendered.task_markers)
-        self.preview.set_document(rendered.html, rendered.line_count, self.base_dir, self._revision)
+        # Cache-busting image URLs must not shift the source offsets used by selections.
+        html = self.image_preview_source(rendered.html)
+        self.preview.set_document(
+            html,
+            rendered.line_count,
+            self.base_dir,
+            self._revision,
+            selection_map=rendered.selection_map,
+            source_length=qt_position(source, len(source)),
+        )
 
     def _toggle_preview_task(self, line: int, column: int, checked: bool, revision: int) -> bool:
         if (

@@ -22,6 +22,11 @@
     renderGeneration: 0,
     bridge: null,
   };
+  const selectionSync = window.createSelectionSync(content, (anchor, position, revision, sequence) => {
+    if (state.bridge && revision === state.revision) {
+      state.bridge.selectionChanged(anchor, position, revision, sequence);
+    }
+  });
 
   const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
   const lastLine = () => Math.max(0, state.lineCount - 1);
@@ -169,6 +174,7 @@
   }
 
   function renderSpecialContent() {
+    selectionSync.beginRender();
     const generation = ++state.renderGeneration;
     const isCurrent = () => generation === state.renderGeneration;
     state.rendering = true;
@@ -181,6 +187,7 @@
     }).finally(() => {
       if (!isCurrent()) return;
       state.rendering = false;
+      selectionSync.rebuild();
       scheduleLayout();
     });
   }
@@ -290,6 +297,7 @@
     // Resolve images ourselves instead of changing <base>, which would also
     // redirect the shell's own resource URLs and in-document fragment links.
     content.innerHTML = payload.html || "";
+    selectionSync.setDocument(payload.selectionMap, payload.sourceLength, revision);
     installCodeCopyButtons();
     installTaskCheckboxes(payload.tasksEditable);
     if (payload.baseUrl) {
@@ -337,6 +345,9 @@
   window.previewApi = {
     setDocument,
     setTasksEditable,
+    setSourceSelection(anchor, position, revision, sequence, scroll = false) {
+      return selectionSync.apply(anchor, position, revision, sequence, scroll);
+    },
     setTheme(dark) {
       const theme = dark ? "dark" : "light";
       if (document.documentElement.dataset.theme !== theme) {

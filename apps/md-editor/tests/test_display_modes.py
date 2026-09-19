@@ -148,7 +148,11 @@ def test_preview_only_copy_uses_preview_selection_not_hidden_source(qtbot, windo
     ready(qtbot, window)
     assert not window.cut_action.isEnabled()
     assert not window.delete_action.isEnabled()
-    assert not window.copy_action.isEnabled()
+    # Entering preview preserves the mirrored source selection.
+    qtbot.waitUntil(lambda: window.copy_action.isEnabled())
+    assert "Heading" in window.preview.page().selectedText()
+    js(qtbot, window, "window.getSelection().removeAllRanges()")
+    qtbot.waitUntil(lambda: not window.copy_action.isEnabled())
     js(
         qtbot,
         window,

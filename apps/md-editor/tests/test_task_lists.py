@@ -1,6 +1,7 @@
 from html.parser import HTMLParser
 
 import pytest
+from bs4 import BeautifulSoup
 
 from md_editor.rendering import render_markdown
 from md_editor.task_lists import task_marker_column
@@ -92,7 +93,7 @@ def test_raw_html_cannot_impersonate_editable_task_inputs():
 def test_task_marker_is_removed_before_reference_link_parsing():
     rendered = render_markdown("- [x] **done** $x$\n\n[x]: https://example.com")
     assert rendered.task_markers == ((0, 3),)
-    assert "<strong>done</strong>" in rendered.html
+    assert BeautifulSoup(rendered.html, "html.parser").strong.get_text() == "done"
     assert 'data-render-kind="math-inline"' in rendered.html
     assert "<a " not in rendered.html
     assert "[x]" not in rendered.html

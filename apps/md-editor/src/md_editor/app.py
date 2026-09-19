@@ -27,6 +27,9 @@ from md_editor.menu_theme import apply_window_menu_theme
 from md_editor.preview import PreviewPane
 from md_editor.rendering import render_markdown
 from md_editor.search import SearchBar, qt_position
+from md_editor.search_highlight import SearchHighlights
+from md_editor.selection_mapping import MappedText
+from md_editor.selection_sync import SelectionSync
 from md_editor.task_lists import task_marker_column
 from md_editor.theme import palette
 from md_editor.ui_icons import outline_icon
@@ -121,6 +124,9 @@ class MainWindow(DisplayModes, FileActions, EditingActions, ExportActions, Chrom
         self.set_display_mode(str(self.settings.value("display/mode", "split")), persist=False)
         self._update_title()
         self._update_positions()
+
+        self.selection_sync = SelectionSync(self)
+        self.search_highlights = SearchHighlights(self)
 
     def _build_actions(self) -> None:
         file_menu = self.menuBar().addMenu("ファイル(&F)")
@@ -354,6 +360,8 @@ class MainWindow(DisplayModes, FileActions, EditingActions, ExportActions, Chrom
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self._confirm_discard():
+            self._closing = True
+            self.selection_sync._timer.stop()
             self._render_timer.stop()
             self.search._timer.stop()
             self.close_image_actions()
@@ -388,11 +396,18 @@ class MainWindow(DisplayModes, FileActions, EditingActions, ExportActions, Chrom
             source, history_key=self.editor.document().availableUndoSteps()
         )
         self.sync_image_watches()
-        rendered = render_markdown(
-            self.image_preview_source(self.session.normalize_references(source))
-        )
+        normalized = self.session.normalize_references(MappedText.original(source))
+        rendered = render_markdown(normalized, original_source=source)
         self._preview_task_markers = set(rendered.task_markers)
-        self.preview.set_document(rendered.html, rendered.line_count, self.base_dir, self._revision)
+        # Cache URLs are a display concern and must not shift source positions.
+        self.preview.set_document(
+            self.image_preview_source(rendered.html),
+            rendered.line_count,
+            self.base_dir,
+            self._revision,
+            selection_map=rendered.selection_map,
+            source_length=qt_position(source, len(source)),
+        )
 
     def _toggle_preview_task(self, line: int, column: int, checked: bool, revision: int) -> bool:
         if (

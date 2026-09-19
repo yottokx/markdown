@@ -128,6 +128,8 @@ class DisplayModes:
             self._changing_display_mode = False
             if self.display_mode == "split" and self.sync_action.isChecked():
                 self._scroll_preview_to(self.editor.source_position())
+            if hasattr(self, "selection_sync"):
+                self.selection_sync.restore()
             self._update_positions()
 
     def _scroll_preview_to(self, position):
@@ -165,13 +167,17 @@ class DisplayModes:
         self._with_source_visible(self.search.previous if backwards else self.search.next)
 
     def copy_active(self):
-        if self.display_mode == "preview":
+        if self.preview_edit_target():
             self.preview.page().triggerAction(QWebEnginePage.WebAction.Copy)
         else:
             self.editor.copy()
 
     def select_all_active(self):
-        if self.display_mode == "preview":
+        if self.preview_edit_target():
             self.preview.page().triggerAction(QWebEnginePage.WebAction.SelectAll)
         else:
             self.editor.selectAll()
+
+    def preview_edit_target(self):
+        sync = getattr(self, "selection_sync", None)
+        return sync.preview_is_active() if sync is not None else self.display_mode == "preview"

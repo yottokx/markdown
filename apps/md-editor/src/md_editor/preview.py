@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import math
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QUrl, Signal, Slot
@@ -139,7 +139,20 @@ class _PreviewBridge(QObject):
     @Slot(int)
     def documentReady(self, revision: int) -> None:
         if revision == self._preview._revision:
+            self._preview._send_source_selection()
             self._preview.ready.emit(revision)
+
+    @Slot(int, int, int, int)
+    def selectionChanged(self, anchor: int, position: int, revision: int, sequence: int) -> None:
+        preview = self._preview
+        cleared = anchor == position == -1
+        if (
+            revision == preview._revision
+            and sequence == preview._selection_sequence
+            and (cleared or 0 <= anchor <= preview._source_length)
+            and (cleared or 0 <= position <= preview._source_length)
+        ):
+            preview.selection_changed.emit(anchor, position, revision, sequence)
 
     @Slot(str, int, result=bool)
     def copyCode(self, text: str, revision: int) -> bool:
@@ -206,6 +219,7 @@ class PreviewPane(QWidget):
     """
 
     source_scrolled = Signal(float, int)
+    selection_changed = Signal(int, int, int, int)
     view_restored = Signal(float, int, int)
     ready = Signal(int)
     error = Signal(str)
@@ -216,6 +230,9 @@ class PreviewPane(QWidget):
         self._task_toggle_handler: Callable[[int, int, bool, int], bool] | None = None
         self._revision = -1
         self._line_count = 1
+        self._source_length = 0
+        self._selection_sequence = 0
+        self._pending_source_selection: tuple[int, int, int, int, bool] | None = None
         self._shell_ready = False
         self._sync_enabled = True
         self._pending_document: dict[str, object] | None = None
@@ -280,7 +297,16 @@ class PreviewPane(QWidget):
     def set_sync_enabled(self, enabled: bool) -> None:
         self._sync_enabled = bool(enabled)
 
-    def set_document(self, html: str, line_count: int, base_dir: Path, revision: int) -> None:
+    def set_document(
+        self,
+        html: str,
+        line_count: int,
+        base_dir: Path,
+        revision: int,
+        *,
+        selection_map: Iterable[dict[str, object]] = (),
+        source_length: int = 0,
+    ) -> None:
         """Replace the fragment without reloading the WebEngine shell.
 
         Documents older than the latest revision are ignored. Relative images
@@ -291,6 +317,7 @@ class PreviewPane(QWidget):
             return
         self._revision = revision
         self._line_count = max(1, int(line_count))
+        self._source_length = max(0, int(source_length))
         base_path = str(Path(base_dir).resolve()) + os.sep
         self._pending_document = {
             "html": resolve_srcsets(html, QUrl.fromLocalFile(base_path).toString()),
@@ -298,13 +325,55 @@ class PreviewPane(QWidget):
             "tasksEditable": self._task_toggle_handler is not None,
             "baseUrl": QUrl.fromLocalFile(base_path).toString(),
             "revision": revision,
+            "selectionMap": list(selection_map),
+            "sourceLength": self._source_length,
         }
+        if self._pending_source_selection and self._pending_source_selection[2] < revision:
+            self._pending_source_selection = None
         if self._pending_scroll and self._pending_scroll[1] != revision:
             self._pending_scroll = None
         if self._pending_view_restore and self._pending_view_restore[1] < revision:
             self._pending_view_restore = None
         if self._shell_ready:
             self._send_document()
+
+    def set_source_selection(
+        self,
+        anchor: int,
+        position: int,
+        revision: int,
+        sequence: int,
+        scroll: bool = False,
+    ) -> None:
+        """Mirror source UTF-16 positions without moving keyboard focus.
+
+        Repeated requests carry an increasing sequence. Browser notifications
+        echo that sequence so delayed responses cannot replace a newer choice.
+        A collapsed source selection clears the preview's native selection.
+        """
+        anchor, position = int(anchor), int(position)
+        revision, sequence = int(revision), int(sequence)
+        if (
+            revision < self._revision
+            or sequence < self._selection_sequence
+            or min(anchor, position) < 0
+            or (revision == self._revision and max(anchor, position) > self._source_length)
+        ):
+            return
+        self._selection_sequence = sequence
+        self._pending_source_selection = (anchor, position, revision, sequence, bool(scroll))
+        self._send_source_selection()
+
+    def _send_source_selection(self) -> None:
+        pending = self._pending_source_selection
+        if not self._shell_ready or pending is None or pending[2] != self._revision:
+            return
+        self._pending_source_selection = None
+        anchor, position, revision, sequence, scroll = pending
+        if max(anchor, position) > self._source_length:
+            return
+        payload = json.dumps([anchor, position, revision, sequence, scroll])
+        self._page.runJavaScript(f"window.previewApi.setSourceSelection(...{payload});")
 
     def restore_view(self, position: float, revision: int, token: int) -> None:
         """Restore after layout and acknowledge only the latest request.
@@ -363,6 +432,7 @@ class PreviewPane(QWidget):
         payload = json.dumps(self._pending_document, ensure_ascii=True, separators=(",", ":"))
         self._pending_document = None
         self._page.runJavaScript(f"window.previewApi.setDocument({payload});")
+        self._send_source_selection()
         if self._pending_scroll:
             position, revision = self._pending_scroll
             self._pending_scroll = None

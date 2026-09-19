@@ -37,7 +37,7 @@ def decode_uri(uri):
 def test_output_is_utf8_self_contained_and_removes_preview_bridge(tmp_path):
     data = png(tmp_path / "img" / "日本語 画像.jpg")  # MIME comes from bytes, not suffix.
     fragment = (
-        '<h1 data-source-line="0" onclick="evil()">タイトル</h1>'
+        '<h1 data-source-line="0" data-selection-id="s0" onclick="evil()">タイトル</h1>'
         '<img src="img/日本語%20画像.jpg" loading="lazy" onerror="evil()">'
         '<span class="code-boundary" data-source-end="3"></span>'
         '<div id="eof-spacer" style="height:900px"></div>'
@@ -55,7 +55,7 @@ def test_output_is_utf8_self_contained_and_removes_preview_bridge(tmp_path):
     )
     assert not doc.find(["script", "iframe"])
     assert not doc.select(
-        "[data-source-line], [data-source-end], [onclick], [onerror], #eof-spacer"
+        "[data-source-line], [data-source-end], [data-selection-id], [onclick], [onerror], #eof-spacer"
     )
     assert not doc.select(".code-boundary")
     assert "loading" not in doc.img.attrs

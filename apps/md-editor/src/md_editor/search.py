@@ -28,6 +28,8 @@ def python_position(text: str, position: int) -> int:
 
 class SearchBar(QWidget):
     navigated = Signal()
+    closed = Signal()
+    refreshed = Signal()
 
     def __init__(self, editor, parent=None):
         super().__init__(parent)
@@ -42,6 +44,7 @@ class SearchBar(QWidget):
         self.status = QLabel()
         self.status.setMinimumWidth(100)
         self._matches: list[re.Match] = []
+        self._match_state = None
         self._last_span: tuple[int, int] | None = None
         self._dark = False
         self._timer = QTimer(self)
@@ -93,6 +96,7 @@ class SearchBar(QWidget):
         self.hide()
         self.editor.setExtraSelections([])
         self.editor.setFocus()
+        self.closed.emit()
 
     def _query_changed(self, *_args):
         self._last_span = None
@@ -107,14 +111,32 @@ class SearchBar(QWidget):
             0 if self.case_sensitive.isChecked() else re.IGNORECASE,
         )
 
+    def _current_match_state(self):
+        document = self.editor.document()
+        return (
+            document,
+            document.revision(),
+            self.query.text(),
+            self.regex.isChecked(),
+            self.case_sensitive.isChecked(),
+        )
+
+    def _ensure_matches(self):
+        # Navigation can precede the delayed refresh after an edit or Undo.
+        # Reuse unchanged matches without clearing/repainting either pane.
+        if self._timer.isActive() or self._match_state != self._current_match_state():
+            self.refresh()
+
     def refresh(self):
         self._timer.stop()
+        self._match_state = self._current_match_state()
         try:
             pattern = self.pattern()
         except re.error as exc:
             self._matches = []
             self.status.setText(f"正規表現エラー: {exc}")
             self.editor.setExtraSelections([])
+            self.refreshed.emit()
             return
         source = self.editor.toPlainText()
         self._matches = list(pattern.finditer(source)) if pattern else []
@@ -134,12 +156,13 @@ class SearchBar(QWidget):
                 selection.format.setBackground(QColor("#665523" if self._dark else "#fff0a8"))
                 highlights.append(selection)
         self.editor.setExtraSelections(highlights)
+        self.refreshed.emit()
 
     def _find(self, backwards=False):
-        self.refresh()
+        self._ensure_matches()
         if not self._matches:
             return
-        source = self.editor.toPlainText()
+        source = self._matches[0].string
         cursor = self.editor.textCursor()
         start = python_position(source, cursor.selectionStart())
         end = python_position(source, cursor.selectionEnd())

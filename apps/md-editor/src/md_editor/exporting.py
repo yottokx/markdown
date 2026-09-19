@@ -517,7 +517,7 @@ class _Exporter:
             for attribute, value in list(tag.attrs.items()):
                 attribute = attribute.lower()
                 if (
-                    attribute.startswith(("on", "data-source-", "data-task-"))
+                    attribute.startswith(("on", "data-source-", "data-task-", "data-selection-"))
                     or attribute in {"data-code-source", "data-preview-code-ui"}
                     or attribute in _ACTIVE_ATTRIBUTES
                 ):
