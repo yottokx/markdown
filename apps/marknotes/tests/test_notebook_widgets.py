@@ -7,6 +7,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QTabBar, QVBoxLayout, QWidget
 
 from marknotes import notebook_widgets
 from marknotes.notebook_widgets import (
+    NotebookNoteSidebar,
     NotebookSidebar,
     NotebookTabs,
     _compact_excerpt,
@@ -27,6 +28,16 @@ def tabs(qtbot):
 @pytest.fixture
 def sidebar(qtbot):
     widget = NotebookSidebar()
+    widget.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+    qtbot.addWidget(widget)
+    widget.resize(320, 500)
+    widget.show()
+    return widget
+
+
+@pytest.fixture
+def note_sidebar(qtbot):
+    widget = NotebookNoteSidebar()
     widget.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
     qtbot.addWidget(widget)
     widget.resize(320, 500)
@@ -699,3 +710,136 @@ def test_note_hover_and_pin_hover_have_separate_backgrounds(qtbot, sidebar, dark
     set_hover(card.pin_button, True)
     assert pin_color() == hover
     assert content_color() != hover
+
+
+@pytest.mark.parametrize("dark", [False, True])
+@pytest.mark.parametrize(
+    "fixture_name, labels",
+    [("sidebar", ("履歴", "ピン", "検索")), ("note_sidebar", ("添付", "アウトライン"))],
+)
+def test_sidebar_text_tabs_are_centered_accessible_and_fit_narrow_panel(
+    qtbot, request, fixture_name, labels, dark
+):
+    sidebar = request.getfixturevalue(fixture_name)
+    sidebar.apply_theme(dark)
+    sidebar.resize(250, 500)
+    QApplication.processEvents()
+    assert sidebar.mode_bar.count() == len(labels)
+    for index, mode in enumerate(sidebar.MODES):
+        assert sidebar.mode_bar.tabText(index) == labels[index]
+        assert sidebar.mode_bar.tabIcon(index).isNull()
+        assert sidebar.mode_bar.tabToolTip(index)
+        assert sidebar.mode_bar.accessibleTabName(index) == sidebar.mode_bar.tabToolTip(index)
+        rect = sidebar.mode_bar.tabRect(index)
+        assert sidebar.mode_bar.rect().contains(rect)
+        assert rect.width() >= sidebar.mode_bar.fontMetrics().horizontalAdvance(labels[index]) + 12
+        qtbot.mouseClick(sidebar.mode_bar, Qt.MouseButton.LeftButton, pos=rect.center())
+        assert sidebar.mode == mode
+    assert sidebar.fixed_button.text() == ""
+    assert not sidebar.fixed_button.icon().isNull()
+
+
+@pytest.mark.parametrize("fixture_name, prefix", [("sidebar", ""), ("note_sidebar", "右")])
+def test_sidebar_fixed_icon_tracks_programmatic_state_theme_and_user_toggle(
+    qtbot, request, fixture_name, prefix
+):
+    sidebar = request.getfixturevalue(fixture_name)
+    requested = []
+    sidebar.pinned_changed.connect(requested.append)
+    released_icon = sidebar.fixed_button.icon().pixmap(24, 24).toImage()
+    sidebar.set_fixed(True)
+    assert requested == []
+    assert sidebar.fixed_button.toolTip() == f"{prefix}サイドバーの固定を解除"
+    assert sidebar.fixed_button.accessibleName() == sidebar.fixed_button.toolTip()
+    fixed_icon = sidebar.fixed_button.icon().pixmap(24, 24).toImage()
+    assert fixed_icon != released_icon
+    sidebar.apply_theme(True)
+    assert sidebar.fixed_button.icon().pixmap(24, 24).toImage() != fixed_icon
+    qtbot.mouseClick(sidebar.fixed_button, Qt.MouseButton.LeftButton)
+    assert requested == [False]
+    assert sidebar.fixed_button.toolTip() == f"{prefix}サイドバーを固定表示"
+
+
+def test_current_note_tools_have_independent_sidebar_and_preserve_library_results(
+    sidebar, note_sidebar
+):
+    assert sidebar.MODES == ("history", "pinned", "search")
+    assert note_sidebar.MODES == ("assets", "outline")
+    assert note_sidebar.mode == "assets"
+    assert not hasattr(note_sidebar, "search_edit")
+    assets, outline = QWidget(), QWidget()
+    note_sidebar.set_mode_panel("assets", assets)
+    note_sidebar.set_mode_panel("outline", outline)
+    sidebar.set_results([{"id": "a", "title": "title"}], has_more=True)
+    result_item, result_card = sidebar._cards[0]
+    sidebar.results.setCurrentItem(result_item)
+    modes = []
+    note_sidebar.mode_changed.connect(modes.append)
+    for mode, selected, hidden in [("outline", outline, assets), ("assets", assets, outline)]:
+        note_sidebar.set_mode(mode)
+        assert selected.isVisible()
+        assert hidden.isHidden()
+        assert sidebar.mode == "history"
+        assert sidebar._cards == [(result_item, result_card)]
+        assert sidebar.results.currentItem() is result_item
+        assert sidebar.results.isVisible()
+        assert sidebar.date_combo.isVisible()
+        assert sidebar.status_label.isVisible()
+        assert sidebar.more_button.isVisible()
+    assert modes == ["outline", "assets"]
+    sidebar.set_mode("search")
+    assert note_sidebar.mode == "assets"
+    assert assets.isVisible()
+    sidebar.set_fixed(True)
+    assert not note_sidebar.fixed_button.isChecked()
+    note_sidebar.set_fixed(True)
+    sidebar.set_fixed(False)
+    assert note_sidebar.fixed_button.isChecked()
+    for mode in note_sidebar.MODES:
+        with pytest.raises(ValueError):
+            sidebar.set_mode(mode)
+    for mode in (*sidebar.MODES, "invalid"):
+        with pytest.raises(ValueError):
+            note_sidebar.set_mode(mode)
+
+
+def test_library_results_can_update_while_note_tools_are_visible(sidebar, note_sidebar):
+    assets = QWidget()
+    note_sidebar.set_mode_panel("assets", assets)
+    sidebar.set_results([{"id": "a", "title": "title"}], has_more=True)
+    assert sidebar.more_button.isVisible()
+    assert sidebar.results.isVisible()
+    assert note_sidebar.mode == "assets"
+    assert assets.isVisible()
+
+
+def test_note_panel_installation_inherits_theme_and_replaces_visible_panel(qtbot, note_sidebar):
+    sidebar = note_sidebar
+
+    class ThemedPanel(QWidget):
+        def __init__(self):
+            super().__init__()
+            self.themes = []
+
+        def apply_theme(self, dark):
+            self.themes.append(dark)
+
+    first, second = ThemedPanel(), ThemedPanel()
+    qtbot.addWidget(first)
+    qtbot.addWidget(second)
+    sidebar.apply_theme(True)
+    sidebar.set_mode("assets")
+    sidebar.set_mode_panel("assets", first)
+    assert first.isVisible()
+    assert first.themes == [True]
+    sidebar.apply_theme(False)
+    assert first.themes == [True, False]
+    sidebar.set_mode_panel("assets", second)
+    assert first.isHidden()
+    assert second.isVisible()
+    assert second.themes == [False]
+    for mode in ("history", "invalid"):
+        with pytest.raises(ValueError):
+            sidebar.set_mode_panel(mode, second)
+    with pytest.raises(ValueError):
+        sidebar.set_mode_panel("outline", second)

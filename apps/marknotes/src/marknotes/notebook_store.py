@@ -1007,6 +1007,26 @@ class NotebookStore:
             )
         return asset_id
 
+    def list_attachments(self, note_id: str) -> list[dict]:
+        """Metadata complements the asset browser's actual filesystem listing."""
+        with self._connection() as connection:
+            self._require(connection, note_id)
+            return [
+                dict(row)
+                for row in connection.execute(
+                    "SELECT * FROM attachments WHERE note_id=? ORDER BY relative_path", (note_id,)
+                )
+            ]
+
+    def remove_attachment(self, note_id: str, relative_path: str) -> None:
+        """Remove metadata after the caller stages a validated asset for deletion."""
+        with self._connection(write=True) as connection:
+            self._require(connection, note_id)
+            connection.execute(
+                "DELETE FROM attachments WHERE note_id=? AND relative_path=?",
+                (note_id, relative_path),
+            )
+
     def backup(self, destination: Path | str) -> Path:
         """Publish a complete directory snapshot only after every file is verified."""
         destination = Path(destination).resolve()

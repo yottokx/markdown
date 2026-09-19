@@ -14,7 +14,7 @@ import time
 import unicodedata
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, ClassVar
 
 from PySide6.QtCore import QEvent, QPoint, QSignalBlocker, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
@@ -684,6 +684,17 @@ class _ResultCard(QFrame):
         super().mouseReleaseEvent(event)
 
 
+class _SidebarModeBar(QTabBar):
+    """Keep centered text tabs reachable at the sidebar's minimum width."""
+
+    def tabSizeHint(self, index: int) -> QSize:
+        size = super().tabSizeHint(index)
+        return QSize(max(56, size.width()), 32)
+
+    def minimumTabSizeHint(self, index: int) -> QSize:
+        return self.tabSizeHint(index)
+
+
 class NotebookSidebar(QWidget):
     """Overlay/fixed panel contents. The window owns positioning and dismissal."""
 
@@ -696,7 +707,13 @@ class NotebookSidebar(QWidget):
     pinned_changed = Signal(bool)
     more_requested = Signal()
     more_matches_requested = Signal(str)
-    MODES = ("history", "pinned", "search")
+    LIBRARY_MODES = ("history", "pinned", "search")
+    MODES = LIBRARY_MODES
+    _MODE_DETAILS: ClassVar[dict[str, tuple[str, str]]] = {
+        "history": ("履歴", "履歴"),
+        "pinned": ("ピン", "ピン止めしたノート"),
+        "search": ("検索", "すべてのノートを検索"),
+    }
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -715,25 +732,29 @@ class NotebookSidebar(QWidget):
         layout.setSpacing(10)
         header = QHBoxLayout()
         header.setSpacing(8)
-        self.mode_bar = QTabBar(self)
+        self.mode_bar = _SidebarModeBar(self)
         self.mode_bar.setObjectName("notebookModeBar")
         self.mode_bar.setDrawBase(False)
         self.mode_bar.setFixedHeight(32)
         self.mode_bar.setExpanding(True)
+        self.mode_bar.setUsesScrollButtons(False)
         self.mode_bar.setDocumentMode(True)
-        for title in ("履歴", "ピン", "検索"):
-            self.mode_bar.addTab(title)
-        self.mode_bar.setAccessibleName("ノートの探し方")
+        for mode in self.MODES:
+            label, description = self._MODE_DETAILS[mode]
+            index = self.mode_bar.addTab(label)
+            self.mode_bar.setTabToolTip(index, description)
+            self.mode_bar.setAccessibleTabName(index, description)
+        self.mode_bar.setAccessibleName("サイドバーの表示内容")
         self.mode_bar.currentChanged.connect(self._mode_selected)
         header.addWidget(self.mode_bar, 1)
         self.fixed_button = QToolButton(self)
         self.fixed_button.setObjectName("notebookFixedButton")
-        self.fixed_button.setText("固定")
-        self.fixed_button.setFixedSize(42, 32)
+        self.fixed_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self.fixed_button.setIconSize(QSize(20, 20))
+        self.fixed_button.setFixedSize(32, 32)
         self.fixed_button.setAutoRaise(True)
         self.fixed_button.setCheckable(True)
-        self.fixed_button.setToolTip("サイドバーを固定表示")
-        self.fixed_button.setAccessibleName("サイドバーを固定表示")
+        self.fixed_button.toggled.connect(self._update_fixed_button)
         self.fixed_button.toggled.connect(self.pinned_changed)
         header.addWidget(self.fixed_button)
         layout.addLayout(header)
@@ -822,7 +843,7 @@ class NotebookSidebar(QWidget):
             }}
             QTabBar#notebookModeBar::tab {{
                 background: transparent; color: {c["muted"]};
-                border: none; border-radius: 4px; margin: 3px; padding: 4px 6px;
+                border: none; border-radius: 4px; margin: 3px; padding: 3px 2px;
             }}
             QTabBar#notebookModeBar::tab:hover {{ color: {c["text"]}; }}
             QTabBar#notebookModeBar::tab:selected {{
@@ -876,7 +897,18 @@ class NotebookSidebar(QWidget):
                 item.setForeground(QColor(c["muted"]))
         for _item, card in self._cards:
             card.apply_theme(dark)
+        self._update_fixed_button()
         self._resize_cards()
+
+    def _update_fixed_button(self) -> None:
+        fixed = self.fixed_button.isChecked()
+        title = "サイドバーの固定を解除" if fixed else "サイドバーを固定表示"
+        self.fixed_button.setToolTip(title)
+        self.fixed_button.setAccessibleName(title)
+        colors = _navigation_colors(self._dark)
+        self.fixed_button.setIcon(
+            outline_icon("lock" if fixed else "unlock", colors["accent" if fixed else "muted"])
+        )
 
     def set_mode(self, mode: str) -> None:
         if mode not in self.MODES:
@@ -894,6 +926,7 @@ class NotebookSidebar(QWidget):
         self.date_combo.setVisible(self.mode == "history")
         self.search_edit.setVisible(self.mode == "search")
         self.search_hint.setVisible(self.mode == "search")
+        self.more_button.setVisible(self._has_more)
         if self.mode == "search":
             self.search_edit.setFocus(Qt.FocusReason.OtherFocusReason)
 
@@ -907,6 +940,7 @@ class NotebookSidebar(QWidget):
     def set_fixed(self, fixed: bool) -> None:
         with QSignalBlocker(self.fixed_button):
             self.fixed_button.setChecked(fixed)
+        self._update_fixed_button()
 
     def _query_edited(self, query: str) -> None:
         self._query_timer.stop()
@@ -1088,6 +1122,158 @@ class NotebookSidebar(QWidget):
         super().resizeEvent(event)
         if hasattr(self, "results"):
             self._resize_cards()
+
+
+class NotebookNoteSidebar(QWidget):
+    """Current-note tools, with independent visibility and fixed state on the right."""
+
+    mode_changed = Signal(str)
+    pinned_changed = Signal(bool)
+    MODES = ("assets", "outline")
+    _MODE_DETAILS: ClassVar[dict[str, tuple[str, str]]] = {
+        "assets": ("添付", "現在のノートの添付ファイル"),
+        "outline": ("アウトライン", "見出しのアウトライン"),
+    }
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.mode = "assets"
+        self._dark = False
+        self._mode_panels: dict[str, QWidget] = {}
+        self.setObjectName("notebookNoteSidebar")
+        self.setMinimumWidth(250)
+        self.resize(320, 500)
+        self.setAutoFillBackground(True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 10)
+        layout.setSpacing(10)
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        self.mode_bar = _SidebarModeBar(self)
+        self.mode_bar.setObjectName("notebookNoteModeBar")
+        self.mode_bar.setDrawBase(False)
+        self.mode_bar.setFixedHeight(32)
+        self.mode_bar.setExpanding(True)
+        self.mode_bar.setUsesScrollButtons(False)
+        self.mode_bar.setDocumentMode(True)
+        for mode in self.MODES:
+            label, description = self._MODE_DETAILS[mode]
+            index = self.mode_bar.addTab(label)
+            self.mode_bar.setTabToolTip(index, description)
+            self.mode_bar.setAccessibleTabName(index, description)
+        self.mode_bar.setAccessibleName("右サイドバーの表示内容")
+        self.mode_bar.currentChanged.connect(self._mode_selected)
+        header.addWidget(self.mode_bar, 1)
+        self.fixed_button = QToolButton(self)
+        self.fixed_button.setObjectName("notebookNoteFixedButton")
+        self.fixed_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self.fixed_button.setIconSize(QSize(20, 20))
+        self.fixed_button.setFixedSize(32, 32)
+        self.fixed_button.setAutoRaise(True)
+        self.fixed_button.setCheckable(True)
+        self.fixed_button.toggled.connect(self._update_fixed_button)
+        self.fixed_button.toggled.connect(self.pinned_changed)
+        header.addWidget(self.fixed_button)
+        layout.addLayout(header)
+        self.apply_theme(False)
+
+    def apply_theme(self, dark: bool) -> None:
+        self._dark = dark
+        c = _navigation_colors(dark)
+        palette = QPalette(self.palette())
+        for role, color in {
+            QPalette.ColorRole.Window: c["chrome"],
+            QPalette.ColorRole.Base: c["chrome"],
+            QPalette.ColorRole.WindowText: c["text"],
+            QPalette.ColorRole.Text: c["text"],
+            QPalette.ColorRole.Button: c["chrome"],
+            QPalette.ColorRole.ButtonText: c["text"],
+            QPalette.ColorRole.PlaceholderText: c["muted"],
+            QPalette.ColorRole.Highlight: c["selected"],
+            QPalette.ColorRole.HighlightedText: c["text"],
+        }.items():
+            palette.setColor(role, QColor(color))
+        palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, QColor(c["muted"]))
+        self.setPalette(palette)
+        self.setStyleSheet(f"""
+            QWidget#notebookNoteSidebar {{
+                background: {c["chrome"]}; color: {c["text"]};
+                border: none; border-left: 1px solid {c["border"]};
+            }}
+            QTabBar#notebookNoteModeBar {{
+                background: {c["hover"]}; border: none; border-radius: 6px;
+            }}
+            QTabBar#notebookNoteModeBar::tab {{
+                background: transparent; color: {c["muted"]};
+                border: none; border-radius: 4px; margin: 3px; padding: 3px 2px;
+            }}
+            QTabBar#notebookNoteModeBar::tab:hover {{ color: {c["text"]}; }}
+            QTabBar#notebookNoteModeBar::tab:selected {{
+                background: {c["base"]}; color: {c["text"]};
+            }}
+            QToolButton#notebookNoteFixedButton {{
+                background: transparent; color: {c["muted"]};
+                border: 1px solid {c["border"]}; border-radius: 6px; padding: 0px;
+            }}
+            QToolButton#notebookNoteFixedButton:hover {{ background: {c["hover"]}; }}
+            QToolButton#notebookNoteFixedButton:checked {{
+                background: {c["selected"]}; color: {c["accent"]};
+            }}
+        """)
+        self._update_fixed_button()
+        for panel in self._mode_panels.values():
+            if callable(apply_theme := getattr(panel, "apply_theme", None)):
+                apply_theme(dark)
+
+    def set_mode_panel(self, mode: str, widget: QWidget) -> None:
+        """Install a current-note panel whose visibility follows the selected mode."""
+        if mode not in self.MODES:
+            raise ValueError(f"Not a current-note sidebar mode: {mode}")
+        previous = self._mode_panels.get(mode)
+        if previous is widget:
+            return
+        if widget in self._mode_panels.values():
+            raise ValueError("A sidebar panel must belong to exactly one mode")
+        if previous is not None:
+            self.layout().removeWidget(previous)
+            previous.hide()
+            previous.setParent(None)
+        self._mode_panels[mode] = widget
+        self.layout().addWidget(widget, 1)
+        if callable(apply_theme := getattr(widget, "apply_theme", None)):
+            apply_theme(self._dark)
+        self._update_mode_widgets()
+
+    def _update_fixed_button(self) -> None:
+        fixed = self.fixed_button.isChecked()
+        title = "右サイドバーの固定を解除" if fixed else "右サイドバーを固定表示"
+        self.fixed_button.setToolTip(title)
+        self.fixed_button.setAccessibleName(title)
+        colors = _navigation_colors(self._dark)
+        self.fixed_button.setIcon(
+            outline_icon("lock" if fixed else "unlock", colors["accent" if fixed else "muted"])
+        )
+
+    def set_mode(self, mode: str) -> None:
+        if mode not in self.MODES:
+            raise ValueError(f"Unknown current-note sidebar mode: {mode}")
+        self.mode_bar.setCurrentIndex(self.MODES.index(mode))
+        self._update_mode_widgets()
+
+    def _mode_selected(self, index: int) -> None:
+        self.mode = self.MODES[index]
+        self._update_mode_widgets()
+        self.mode_changed.emit(self.mode)
+
+    def _update_mode_widgets(self) -> None:
+        for mode, panel in self._mode_panels.items():
+            panel.setVisible(mode == self.mode)
+
+    def set_fixed(self, fixed: bool) -> None:
+        with QSignalBlocker(self.fixed_button):
+            self.fixed_button.setChecked(fixed)
+        self._update_fixed_button()
 
 
 Sidebar = NotebookSidebar

@@ -26,6 +26,33 @@ _SHAPES = {
         '<path d="M7.5 3.5V9h8V3.5M7.5 20.5V14h9v6.5"/>'
     ),
     "pin": ('<path d="M8 3.5h8l-1 7 3 3v2H6v-2l3-3-1-7ZM12 15.5v5"/>'),
+    "lock": (
+        '<rect x="5.5" y="10" width="13" height="11" rx="2"/>'
+        '<path d="M8 10V7a4 4 0 0 1 8 0v3M12 14.5v2.5"/>'
+    ),
+    "unlock": (
+        '<rect x="5.5" y="10" width="13" height="11" rx="2"/>'
+        '<path d="M8 10V7a4 4 0 0 1 7.5-2M12 14.5v2.5"/>'
+    ),
+    "history": '<path d="M3 10a9 9 0 1 1 1.8 7.6M3 4.5V10h5.5M12 7v5l3.5 2"/>',
+    "search": '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.2 15.2 5.3 5.3"/>',
+    "refresh": (
+        '<path d="M20 7v5h-5M4 17v-5h5"/>'
+        '<path d="M18.2 9a7 7 0 0 0-11.7-2.5L4 9M5.8 15a7 7 0 0 0 11.7 2.5L20 15"/>'
+    ),
+    "assets": (
+        '<path d="m8 13 6.3-6.3a2.5 2.5 0 0 1 3.5 3.5l-8.2 8.2a4 4 0 0 1-5.7-5.7'
+        'l9-9a5.5 5.5 0 0 1 7.8 7.8l-9 9"/>'
+    ),
+    "outline": '<path d="M8 5h12M11 12h9M11 19h9M4 4v2M7 11v2M7 18v2"/>',
+    "sidebar": (
+        '<rect x="3" y="4.5" width="18" height="15" rx="2"/>'
+        '<path d="M9 4.5v15M5.5 8h1M5.5 11h1M5.5 14h1"/>'
+    ),
+    "sidebar-right": (
+        '<rect x="3" y="4.5" width="18" height="15" rx="2"/>'
+        '<path d="M15 4.5v15M17.5 8h1M17.5 11h1M17.5 14h1"/>'
+    ),
     "menu": '<path d="M5 6.5h14M5 12h14M5 17.5h14"/>',
     "undo": '<path d="m9 5-5 5 5 5M4 10h9a7 7 0 0 1 7 7v2"/>',
     "redo": '<path d="m15 5 5 5-5 5M20 10h-9a7 7 0 0 0-7 7v2"/>',
@@ -112,7 +139,9 @@ def outline_icon(name: str, color: QColor | str) -> QIcon:
     """Return a scalable 24-unit icon in the requested foreground color.
 
     Names: new, open, save, undo, redo, source, preview, split, minimize, maximize, restore,
-    close, menu, pin. Recreate icons with the new foreground color after a theme change.
+    close, menu, pin, lock, unlock, history, search, refresh, assets, outline, sidebar,
+    sidebar-right. Recreate icons
+    with the new foreground color after a theme change.
     """
     if name not in _SHAPES:
         raise ValueError(f"Unknown outline icon: {name}")

@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QDialog,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QMessageBox,
@@ -34,10 +35,12 @@ from .image_actions import ImageRenameDialog
 from .image_rename import current_images
 from .local_links import LocalLinkDialog
 from .managed_assets import ManagedAssets, export_markdown, import_markdown
+from .notebook_assets import NotebookAssetsController, NotebookAssetsPanel
+from .notebook_outline import NotebookOutlinePanel
 from .notebook_runtime import BackgroundJobs, NoteDocument, NoteSession
 from .notebook_store import NotebookStore, find_match_ranges
 from .notebook_theme import notebook_stylesheet
-from .notebook_widgets import NotebookSidebar, NotebookTabs
+from .notebook_widgets import NotebookNoteSidebar, NotebookSidebar, NotebookTabs
 from .search import qt_position
 from .ui_icons import outline_icon
 
@@ -74,11 +77,13 @@ class NotebookWindow(MainWindow):
         self._search_cancel = threading.Event()
         self._library_query = ""
         self._sidebar_mode = "history"
+        self._right_sidebar_mode = "assets"
         self._date_order = "updated"
         self._result_offset = 0
         self._snippet_limits = {}
         self._current_match = 0
         self._load_generation = 0
+        self._outline_jump = None
         self.store = NotebookStore(Path(library_root) if library_root else default_library_root())
         super().__init__(settings)
         self.session.close()
@@ -176,7 +181,8 @@ class NotebookWindow(MainWindow):
         add(self.edit_menu, "すべてのノートを検索…", self.show_library_search, "Ctrl+Shift+F")
         add(self.view_menu, "次のタブ", lambda: self.cycle_tab(1), "Ctrl+Tab")
         add(self.view_menu, "前のタブ", lambda: self.cycle_tab(-1), "Ctrl+Shift+Tab")
-        add(self.view_menu, "サイドバー", self.toggle_sidebar, "Ctrl+B")
+        add(self.view_menu, "左サイドバー", self.toggle_sidebar, "Ctrl+B")
+        add(self.view_menu, "右サイドバー", self.toggle_right_sidebar)
         add(self.insert_menu, "添付ファイル…", self.insert_attachment_dialog)
         add(
             self.insert_menu,
@@ -213,12 +219,33 @@ class NotebookWindow(MainWindow):
         self.sidebar_button = QToolButton(self.chrome_header)
         self.sidebar_button.setObjectName("notebookSidebarToggle")
         self.sidebar_button.setCheckable(True)
-        self.sidebar_button.setToolTip("サイドバーを開く / 閉じる")
-        self.sidebar_button.setAccessibleName("サイドバー")
+        self.sidebar_button.setToolTip("左サイドバーを開く / 閉じる (Ctrl+B)")
+        self.sidebar_button.setAccessibleName("左サイドバー")
         self.sidebar_button.setFixedSize(32, 30)
         self.sidebar_button.setIconSize(QSize(18, 18))
         self.sidebar_button.clicked.connect(self.toggle_sidebar)
         self.set_menu_leading_widget(self.sidebar_button)
+        display_row = self.display_toolbar.layout()
+        display_row.addSpacing(6)
+        self.right_sidebar_separator = QFrame(self.display_toolbar)
+        self.right_sidebar_separator.setObjectName("notebookRightSidebarSeparator")
+        self.right_sidebar_separator.setFrameShape(QFrame.Shape.VLine)
+        self.right_sidebar_separator.setFixedSize(1, 18)
+        display_row.addWidget(self.right_sidebar_separator, 0, Qt.AlignmentFlag.AlignVCenter)
+        display_row.addSpacing(6)
+        self.right_sidebar_button = QToolButton(self.display_toolbar)
+        self.right_sidebar_button.setObjectName("notebookRightSidebarToggle")
+        self.right_sidebar_button.setCheckable(True)
+        self.right_sidebar_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self.right_sidebar_button.setAutoRaise(True)
+        self.right_sidebar_button.setFixedSize(32, 28)
+        self.right_sidebar_button.setIconSize(QSize(18, 18))
+        self.right_sidebar_button.setToolTip(
+            "右サイドバーを開く / 閉じる（添付ファイル・アウトライン）"
+        )
+        self.right_sidebar_button.setAccessibleName("右サイドバー")
+        self.right_sidebar_button.clicked.connect(self.toggle_right_sidebar)
+        display_row.addWidget(self.right_sidebar_button)
         self.splitter.setObjectName("noteSplitter")
         self.splitter.setHandleWidth(1)
         self.search.setObjectName("noteSearchBar")
@@ -279,6 +306,9 @@ class NotebookWindow(MainWindow):
         empty_layout.addStretch()
         self.pages.addWidget(empty)
         layout.addWidget(self.pages, 1)
+        self._right_sidebar_space = QWidget()
+        self._right_sidebar_space.setFixedWidth(0)
+        layout.addWidget(self._right_sidebar_space)
         self.setCentralWidget(self.workspace)
         self.cleanup_button = QToolButton(self.statusBar())
         self.cleanup_button.setText("添付の削除待ち")
@@ -291,6 +321,22 @@ class NotebookWindow(MainWindow):
         self.cleanup_button.hide()
         self.sidebar = NotebookSidebar(self.workspace)
         self.sidebar.hide()
+        self.right_sidebar = NotebookNoteSidebar(self.workspace)
+        self.right_sidebar.hide()
+        self.assets_panel = NotebookAssetsPanel(self.right_sidebar)
+        self.assets_controller = NotebookAssetsController(self, self.assets_panel)
+        self.outline_panel = NotebookOutlinePanel(self.right_sidebar)
+        self.right_sidebar.set_mode_panel("assets", self.assets_panel)
+        self.right_sidebar.set_mode_panel("outline", self.outline_panel)
+        self._right_sidebar_fixed = self.settings.value("rightSidebar/fixed", False, type=bool)
+        self.right_sidebar.set_fixed(self._right_sidebar_fixed)
+        self.right_sidebar.mode_changed.connect(self._right_sidebar_mode_changed)
+        self.right_sidebar.pinned_changed.connect(self._right_sidebar_fixed_changed)
+        self.outline_panel.heading_requested.connect(self._jump_to_heading)
+        self._outline_timer = QTimer(self)
+        self._outline_timer.setSingleShot(True)
+        self._outline_timer.setInterval(180)
+        self._outline_timer.timeout.connect(self._refresh_outline)
         self._sidebar_fixed = self.settings.value("sidebar/fixed", False, type=bool)
         self.sidebar.set_fixed(self._sidebar_fixed)
         self.sidebar.note_requested.connect(self._result_selected)
@@ -304,6 +350,8 @@ class NotebookWindow(MainWindow):
         self.sidebar.more_matches_requested.connect(self._load_more_matches)
         if self._sidebar_fixed:
             self.sidebar.show()
+        if self._right_sidebar_fixed:
+            self.right_sidebar.show()
 
     def apply_theme(self, mode: str, persist: bool = True) -> None:
         if self._notebook_ready:
@@ -321,8 +369,13 @@ class NotebookWindow(MainWindow):
         dark = self.preview._dark
         self.tabs.apply_theme(dark)
         self.sidebar.apply_theme(dark)
+        self.right_sidebar.apply_theme(dark)
         self._apply_source_highlights()
-        self.sidebar_button.setIcon(outline_icon("menu", "#e1e7ef" if dark else "#253047"))
+        foreground = "#e1e7ef" if dark else "#253047"
+        self.sidebar_button.setIcon(outline_icon("sidebar", foreground))
+        self.right_sidebar_button.setIcon(outline_icon("sidebar-right", foreground))
+        border = "#353e4b" if dark else "#dce2ea"
+        self.right_sidebar_separator.setStyleSheet(f"background: {border}; border: none;")
         self._layout_sidebar()
 
     def _load_tab_summaries(self):
@@ -439,6 +492,7 @@ class NotebookWindow(MainWindow):
         }
 
     def _activate(self, note_id, match_start=None):
+        self._outline_jump = None
         self._capture_view()
         self.save_pending()
         self._persist_view()
@@ -499,6 +553,8 @@ class NotebookWindow(MainWindow):
         self._update_positions()
         self.search.refresh()
         self._apply_source_highlights()
+        self.assets_controller.set_note(note_id, self.base_dir)
+        self._refresh_outline()
 
     def _restore_note_view(self, note_id, token, match_start):
         if self._active != note_id or self._display_change_token != token:
@@ -523,8 +579,12 @@ class NotebookWindow(MainWindow):
             self._scroll_preview_to(float(line))
 
     def _show_empty(self):
+        self._outline_jump = None
+        self._outline_timer.stop()
         self._loading = True
         self._active = None
+        self.assets_controller.set_note(None, None)
+        self.outline_panel.set_source(None, "")
         self._revision += 1
         self._render_timer.stop()
         self.close_image_actions()
@@ -592,10 +652,13 @@ class NotebookWindow(MainWindow):
         self._summaries[state.id]["title"] = note_title(text)
         self._autosave.start()
         if state.id == self._active:
+            self._outline_jump = None
             self._revision += 1
             self._render_timer.start()
             self._highlight_timer.start()
             self._update_title()
+            if self._right_sidebar_mode == "outline":
+                self._outline_timer.start()
         self.tabs.set_notes(
             [
                 {**self._summaries[note_id], "last_active": self._visited.get(note_id, 0)}
@@ -694,6 +757,8 @@ class NotebookWindow(MainWindow):
         self.editor.setReadOnly(busy or not bool(self._active))
         self.tabs.setEnabled(not busy)
         self.sidebar.setEnabled(not busy)
+        self.right_sidebar.setEnabled(not busy)
+        self.assets_controller.set_busy(busy)
         self.note_menu.setEnabled(not busy)
         self.edit_menu.setEnabled(not busy)
         self.insert_menu.setEnabled(not busy and bool(self._active))
@@ -978,6 +1043,26 @@ class NotebookWindow(MainWindow):
         if self.sidebar.isVisible():
             self.refresh_library()
 
+    def toggle_right_sidebar(self):
+        if not hasattr(self, "right_sidebar"):
+            return
+        self.right_sidebar.setVisible(not self.right_sidebar.isVisible())
+        self._layout_sidebar()
+        if self.right_sidebar.isVisible():
+            self._refresh_right_sidebar()
+
+    def _right_sidebar_mode_changed(self, mode):
+        self._right_sidebar_mode = mode
+        self._refresh_right_sidebar()
+
+    def _refresh_right_sidebar(self):
+        if not self._notebook_ready or self._shutdown_done or self._busy or self._closing:
+            return
+        if self._right_sidebar_mode == "assets":
+            self.assets_controller.refresh()
+        else:
+            self._refresh_outline()
+
     def show_history(self):
         self.sidebar.set_mode("history")
         self.sidebar.show()
@@ -994,6 +1079,43 @@ class NotebookWindow(MainWindow):
         self._sidebar_mode = mode
         self.refresh_library()
 
+    def _refresh_outline(self):
+        self._outline_timer.stop()
+        if self._shutdown_done:
+            return
+        self.outline_panel.set_source(
+            self._active, self.editor.toPlainText() if self._active else ""
+        )
+
+    def _jump_to_heading(self, note_id, line):
+        if note_id != self._active or self._busy or self._closing or self._shutdown_done:
+            return
+        # Ignore a row awaiting the editing debounce instead of jumping to a stale line.
+        if self.outline_panel._source != self.editor.toPlainText():
+            self._refresh_outline()
+            return
+        block = self.editor.document().findBlockByNumber(line)
+        if not block.isValid():
+            return
+        syncing = self._syncing_editor
+        self._syncing_editor = True
+        try:
+            cursor = QTextCursor(block)
+            self.editor.setTextCursor(cursor)
+            self.editor.scroll_to_source(float(line))
+        finally:
+            self._syncing_editor = syncing
+        self._preview_position = float(line)
+        self._outline_jump = (note_id, self._revision, float(line))
+        if self._render_timer.isActive():
+            self._render_timer.stop()
+            self._render()
+        self._scroll_preview_to(float(line))
+        if self._rendered_revision == self._revision:
+            self._outline_jump = None
+        self._schedule_view()
+        self._update_positions()
+
     def _date_order_changed(self, order):
         self._date_order = order
         self.refresh_library()
@@ -1003,15 +1125,32 @@ class NotebookWindow(MainWindow):
         self.settings.setValue("sidebar/fixed", fixed)
         self._layout_sidebar()
 
+    def _right_sidebar_fixed_changed(self, fixed):
+        self._right_sidebar_fixed = fixed
+        self.settings.setValue("rightSidebar/fixed", fixed)
+        self._layout_sidebar()
+
     def _layout_sidebar(self):
-        if not hasattr(self, "sidebar"):
+        if not hasattr(self, "right_sidebar"):
             return
-        width = min(340, max(200, self.workspace.width() - 80))
-        fixed = self._sidebar_fixed and self.workspace.width() >= width + 700
-        self._sidebar_space.setFixedWidth(width if fixed and self.sidebar.isVisible() else 0)
+        width = min(340, max(250, self.workspace.width() - 80))
+        available = self.workspace.width()
+        # Keep the requested state while the top-level window is still opening.
+        left_visible = not self.sidebar.isHidden()
+        right_visible = not self.right_sidebar.isHidden()
+        left_fixed = self._sidebar_fixed and left_visible and available >= width + 700
+        left_width = width if left_fixed else 0
+        right_fixed = (
+            self._right_sidebar_fixed and right_visible and available - left_width >= width + 700
+        )
+        self._sidebar_space.setFixedWidth(left_width)
+        self._right_sidebar_space.setFixedWidth(width if right_fixed else 0)
         self.sidebar.setGeometry(0, 0, width, self.workspace.height())
-        self.sidebar_button.setChecked(self.sidebar.isVisible())
+        self.right_sidebar.setGeometry(max(0, available - width), 0, width, self.workspace.height())
+        self.sidebar_button.setChecked(left_visible)
+        self.right_sidebar_button.setChecked(right_visible)
         self.sidebar.raise_()
+        self.right_sidebar.raise_()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -1025,26 +1164,46 @@ class NotebookWindow(MainWindow):
             self._persist_view()
         if event.type() == QEvent.Type.InputMethod and watched is self.sidebar.search_edit:
             self._sidebar_composing = bool(event.preeditString())
-        if self.sidebar.isVisible():
+        if (
+            QApplication.activePopupWidget() is None
+            and QApplication.activeModalWidget() is None
+            and self.isActiveWindow()
+        ):
+            panels = (
+                (self.right_sidebar, self.right_sidebar_button, self._right_sidebar_space),
+                (self.sidebar, self.sidebar_button, self._sidebar_space),
+            )
+            visible = [
+                (panel, button, space) for panel, button, space in panels if panel.isVisible()
+            ]
             if event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape:
                 composing = self.editor._composing or self._sidebar_composing
-                if not composing and self.isActiveWindow():
-                    self.sidebar.hide()
+                if visible and not composing:
+                    focus = self.focusWidget()
+                    panel = next(
+                        (
+                            panel
+                            for panel, _, _ in visible
+                            if focus is panel or (focus is not None and panel.isAncestorOf(focus))
+                        ),
+                        visible[0][0],
+                    )
+                    panel.hide()
                     self._layout_sidebar()
                     self.editor.setFocus()
                     return True
-            if (
-                event.type() == QEvent.Type.MouseButtonPress
-                and not self._sidebar_space.width()
-                and hasattr(event, "globalPosition")
-            ):
+            if event.type() == QEvent.Type.MouseButtonPress and hasattr(event, "globalPosition"):
                 point = event.globalPosition().toPoint()
-                inside = self.sidebar.rect().contains(self.sidebar.mapFromGlobal(point))
-                toggle = self.sidebar_button.rect().contains(
-                    self.sidebar_button.mapFromGlobal(point)
+                # Operating either sidebar (or its toggle) keeps the other one open.
+                in_controls = any(
+                    widget.isVisible() and widget.rect().contains(widget.mapFromGlobal(point))
+                    for panel, button, _ in panels
+                    for widget in (panel, button)
                 )
-                if not inside and not toggle and self.isActiveWindow():
-                    self.sidebar.hide()
+                if not in_controls:
+                    for panel, _, space in visible:
+                        if not space.width():
+                            panel.hide()
                     self._layout_sidebar()
         return super().eventFilter(watched, event)
 
@@ -1273,6 +1432,11 @@ class NotebookWindow(MainWindow):
         super()._preview_ready(revision)
         if self._notebook_ready and revision == self._revision:
             self._apply_library_highlights()
+            if self._outline_jump is not None:
+                note_id, target_revision, line = self._outline_jump
+                if note_id == self._active and target_revision == revision:
+                    self._outline_jump = None
+                    self._scroll_preview_to(line)
 
     def paste_mime(self, mime):
         if not self._active or self._busy:
@@ -1372,6 +1536,7 @@ class NotebookWindow(MainWindow):
                     )
                 self.save_pending()
             self.sync_image_watches()
+            self.assets_controller.refresh()
             self._drain_deferred_operation()
 
         self.writer.submit(work, done)
@@ -1436,6 +1601,7 @@ class NotebookWindow(MainWindow):
         self._revision += 1
         self._render_timer.start()
         self.sync_image_watches()
+        self.assets_controller.refresh()
 
     def _review_image_rename(self, image=None):
         if not self._active or self._busy:
@@ -1635,6 +1801,7 @@ class NotebookWindow(MainWindow):
                 self._max_save,
                 self._view_timer,
                 self._highlight_timer,
+                self._outline_timer,
                 self._render_timer,
                 self.search._timer,
             ):
